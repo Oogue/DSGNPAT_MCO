@@ -94,30 +94,6 @@ function updateCommitButtonState() {
     }
 }
 
-// Add event listener to toggle for real-time button state update
-document.addEventListener('DOMContentLoaded', async function() {
-    // Detect local node first
-    await detectLocalNode();
-    
-    // Start status monitoring
-    startStatusMonitoring();
-    
-    // Load initial data for the current node
-    loadNodeData(currentNode);
-    
-    // Load current settings from backend
-    await loadCurrentSettings();
-    
-    // Set up toggle event listener
-    const autoCommitToggle = document.getElementById('autocommit-toggle');
-    if (autoCommitToggle) {
-        autoCommitToggle.addEventListener('change', updateCommitButtonState);
-    }
-    
-    // Initial button state update
-    updateCommitButtonState();
-});
-
 // Load node status from backend
 async function loadNodeStatus() {
     try {
@@ -180,21 +156,6 @@ function startStatusMonitoring() {
     setInterval(loadNodeStatus, 10000);
 }
 
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', async function() {
-    // Detect local node first
-    await detectLocalNode();
-    
-    // Start status monitoring
-    startStatusMonitoring();
-    
-    // Load initial data for the current node
-    loadNodeData(currentNode);
-    
-    // Load current settings from backend
-    loadCurrentSettings();
-});
-
 // Load current settings from backend and update UI
 async function loadCurrentSettings() {
     try {
@@ -221,8 +182,168 @@ async function loadCurrentSettings() {
                 };
                 isolationSelect.value = levelMap[settings.isolation_level] || 'read-committed';
             }
+            
+            // Update commit button state after loading settings
+            updateCommitButtonState();
         }
     } catch (error) {
         console.error('Error loading current settings:', error);
     }
 }
+
+// Open Commit Modal and load pending transactions
+async function openCommitModal() {
+    const modal = document.getElementById('commit-modal');
+    const listContainer = document.getElementById('pending-transactions-list');
+    
+    if (!modal || !listContainer) {
+        console.error('Commit modal elements not found');
+        return;
+    }
+    
+    modal.classList.add('active');
+    listContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">Loading pending transactions...</div>';
+    
+    await refreshPendingTransactions();
+}
+
+function closeCommitModal() {
+    const modal = document.getElementById('commit-modal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+// Refresh and display pending transactions
+async function refreshPendingTransactions() {
+    const listContainer = document.getElementById('pending-transactions-list');
+    
+    if (!listContainer) return;
+    
+    try {
+        const response = await fetch('/active-transactions');
+        const transactions = await response.json();
+        
+        console.log('Pending transactions:', transactions);
+        
+        if (Object.keys(transactions).length === 0) {
+            listContainer.innerHTML = `
+                <div style="text-align: center; padding: 30px; color: #28a745; background-color: #d4edda; border-radius: 4px;">
+                    <strong>✓ No pending transactions</strong><br>
+                    <small style="color: #155724;">All transactions have been resolved.</small>
+                </div>
+            `;
+            return;
+        }
+        
+        // Build transaction cards
+        let html = '';
+        for (const [txnId, txnData] of Object.entries(transactions)) {
+            html += `
+                <div class="transaction-card">
+                    <div class="transaction-header">
+                        <div>
+                            <strong>Transaction ID:</strong> <code>${txnId}</code>
+                        </div>
+                        <span class="transaction-badge">${txnData.type || 'UNKNOWN'}</span>
+                    </div>
+                    <div class="transaction-details">
+                        <div><strong>Status:</strong> ${txnData.status || 'PENDING'}</div>
+                        <div><strong>Connections:</strong> ${txnData.connection_count || 0} node(s)</div>
+                    </div>
+                    <div class="transaction-actions">
+                        <button class="commit-action-btn" onclick="resolveTransaction('${txnId}', 'COMMIT')">
+                            ✓ COMMIT
+                        </button>
+                        <button class="rollback-action-btn" onclick="resolveTransaction('${txnId}', 'ROLLBACK')">
+                            ✗ ROLLBACK
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        listContainer.innerHTML = html;
+        
+    } catch (error) {
+        console.error('Error loading pending transactions:', error);
+        listContainer.innerHTML = `
+            <div style="text-align: center; padding: 20px; color: #dc3545; background-color: #f8d7da; border-radius: 4px;">
+                <strong>Error loading transactions</strong><br>
+                <small>${error.message}</small>
+            </div>
+        `;
+    }
+}
+
+// Resolve a transaction (COMMIT or ROLLBACK)
+async function resolveTransaction(txnId, action) {
+    if (!confirm(`Are you sure you want to ${action} transaction ${txnId}?`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/resolve-transaction', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                txnId: txnId,
+                action: action
+            })
+        });
+        
+        const result = await response.json();
+        
+        console.log('Resolution result:', result);
+        
+        // Show feedback
+        const message = `${action} Result:\n\n${result.message}\n\nLogs:\n${result.logs.join('\n')}`;
+        alert(message);
+        
+        // Refresh the list
+        await refreshPendingTransactions();
+        
+        // Refresh the data table
+        if (typeof fetchMovies === 'function') {
+            fetchMovies();
+        }
+        
+    } catch (error) {
+        console.error(`Error resolving transaction:`, error);
+        alert(`Failed to ${action} transaction. Check console for details.`);
+    }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', async function() {
+    // Detect local node first
+    await detectLocalNode();
+    
+    // Start status monitoring
+    startStatusMonitoring();
+    
+    // Load initial data for the current node
+    loadNodeData(currentNode);
+    
+    // Load current settings from backend
+    await loadCurrentSettings();
+    
+    // Set up toggle event listener
+    const autoCommitToggle = document.getElementById('autocommit-toggle');
+    if (autoCommitToggle) {
+        autoCommitToggle.addEventListener('change', updateCommitButtonState);
+    }
+    
+    // Initial button state update
+    updateCommitButtonState();
+    
+    // Add click outside listener for commit modal
+    const commitModal = document.getElementById('commit-modal');
+    if (commitModal) {
+        commitModal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeCommitModal();
+            }
+        });
+    }
+});
