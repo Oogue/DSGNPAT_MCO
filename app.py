@@ -12,6 +12,7 @@ from log_manager import DistributedLogManager
 from db_helpers import get_db_connection, DB_CONFIG    
 import time
 import threading
+import traceback
 
 load_dotenv()
 try:
@@ -410,95 +411,113 @@ def run_recovery():
 
 
 
-# --- ROUTE: Insert (Target Fragment First Strategy) ---
+# --- ROUTE: Insert (Failover Logic) ---
 @app.route('/insert', methods=['POST'])
 def insert_movie():
-    if not LOG_MANAGER:
-        return jsonify({"error": "Distributed Log Manager not initialized."}), 500
+    try:
+        if not LOG_MANAGER:
+            return jsonify({"error": "Distributed Log Manager not initialized."}), 503
+        if not request.json:
+             return jsonify({"error": "Missing JSON body"}), 400
 
-    data = request.json
-    
-    # 1. Transaction Setup
-    txn_id = str(uuid.uuid4())
-    
-    # Prepare Data
-    title_id = data.get('titleId')
-    region = data.get('region')
-    
-    params = (
-        title_id, data.get('ordering'), data.get('title'), region, 
-        data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle')
-    )
-    
-    # Define the Query
-    query = """
-        INSERT INTO movies 
-        (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) 
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """
-
-    # 2. Determine Logic based on Location (Fragmentation Rules)
-    # Rules: US/JP -> Node 2, Others -> Node 3
-    primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-    
-    # Replication Target is ALWAYS Central (Node 1)
-    # Exception: If Node 1 is somehow the primary (not in current rules), we don't replicate to it again.
-    replication_target_node = 'node1' if primary_target_node != 'node1' else None
-
-    logs = []
-    
-    # --- PHASE 1: PRIMARY COMMIT (Target Fragment) ---
-    logs.append(f"Step 1: Attempting PRIMARY COMMIT to {primary_target_node}...")
-    
-    # We assume 'execute_query' handles the connection to the correct node (Local or Remote)
-    res_primary = execute_query(primary_target_node, query, params)
-    
-    if not res_primary['success']:
-        # If primary commit fails, we abort.
-        return jsonify({
-            "status": "FAILURE", 
-            "stage": "PRIMARY_COMMIT", 
-            "error": res_primary['error'],
-            "logs": logs
-        }), 500
-    
-    # Log the commit. 
-    # We log this in the CURRENT node's log manager to track the transaction lifecycle,
-    # even if we just performed a remote write.
-    new_value = data
-    LOG_MANAGER.log_local_commit(txn_id, 'INSERT', title_id, new_value)
-    logs.append(f"Step 1 Success: Primary DB write to {primary_target_node} & Log Entry created.")
-
-    # --- PHASE 2: REPLICATION (To Central) ---
-    final_status = "FULLY_COMMITTED"
-    
-    if replication_target_node:
-        logs.append(f"Step 2: Attempting REPLICATION to {replication_target_node}...")
+        data = request.json
+        txn_id = str(uuid.uuid4())
         
-        # Update log status to PENDING
-        LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+        title_id = data.get('titleId')
+        region = data.get('region')
         
-        # Attempt Replication Write
-        res_replica = execute_query(replication_target_node, query, params)
+        print(f"\n--- PROCESSING INSERT: {title_id} ({region}) ---")
         
-        if res_replica['success']:
-            # Update Log to SUCCESS
-            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
-            logs.append(f"Step 2 Success: Replicated to {replication_target_node}.")
+        params = (
+            title_id, data.get('ordering'), data.get('title'), region, 
+            data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle')
+        )
+        
+        query = """
+            INSERT INTO movies 
+            (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        # 1. Determine Nodes
+        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+        replication_target_node = 'node1' if primary_target_node != 'node1' else None
+        
+        print(f"   [DECISION] Primary: {primary_target_node}, Secondary: {replication_target_node}")
+
+        logs = []
+        
+        # --- PHASE 1: PRIMARY COMMIT ---
+        logs.append(f"Step 1: Attempting PRIMARY COMMIT to {primary_target_node}...")
+        res_primary = execute_query(primary_target_node, query, params)
+        
+        # Log the transaction record immediately (Local Log)
+        new_value = data
+        LOG_MANAGER.log_local_commit(txn_id, 'INSERT', title_id, new_value)
+        
+        primary_success = False
+        if res_primary['success']:
+            primary_success = True
+            logs.append(f"Step 1 Success: Written to {primary_target_node}.")
         else:
-            # Update Log to FAILED
+            # IMPORTANT: Primary Failed. 
+            # We UPDATE the log to point to the FAILED primary target.
+            # This ensures the Recovery Thread sees "Target: node3, Status: FAILED" and retries later.
+            primary_success = False
+            logs.append(f"Step 1 Failed: {res_primary.get('error')}")
+            
+            LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
             LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
-            logs.append(f"Step 2 Failed: Could not write to {replication_target_node}. Error: {res_replica.get('error')}")
-            logs.append("Action: Marked as REPLICATION_FAILED. Background recovery will retry.")
-            final_status = "PRIMARY_ONLY_REPLICATION_PENDING"
+            
+            logs.append(f"Action: Log updated. Recovery will retry {primary_target_node} later.")
 
-    return jsonify({
-        "status": final_status,
-        "txn_id": txn_id,
-        "logs": logs,
-        "primary_node": primary_target_node,
-        "replication_node": replication_target_node
-    })
+        # --- PHASE 2: REPLICATION / BACKUP (To Central) ---
+        final_status = "FULLY_COMMITTED"
+        
+        if replication_target_node:
+            logs.append(f"Step 2: Proceeding to Node 1 ({replication_target_node})...")
+            
+            res_replica = execute_query(replication_target_node, query, params)
+            
+            if res_replica['success']:
+                logs.append(f"Step 2 Success: Data saved on {replication_target_node}.")
+                
+                if primary_success:
+                    # Normal Case: Primary OK, Replica OK.
+                    # Update log to reflect replication success.
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+                else:
+                    # Failover Case: Primary FAILED, Replica OK.
+                    # DO NOT update log target. Leave it pointing to FAILED Primary so recovery fixes it.
+                    final_status = "PRIMARY_FAILED_BACKUP_SUCCESS"
+                    logs.append("Info: Transaction saved on Backup Node only. Primary recovery pending.")
+            else:
+                logs.append(f"Step 2 Failed: {res_replica.get('error')}")
+                
+                if primary_success:
+                    # Primary OK, Replica Failed. Mark Replica for recovery.
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+                    final_status = "PRIMARY_ONLY_REPLICATION_PENDING"
+                else:
+                    # Both Failed. 
+                    final_status = "TOTAL_FAILURE_PENDING_RECOVERY"
+
+        return jsonify({
+            "status": final_status,
+            "txn_id": txn_id,
+            "logs": logs,
+            "primary_node": primary_target_node,
+            "replication_node": replication_target_node
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "status": "CRASH",
+            "error": "Internal Server Error trapped",
+            "details": str(e)
+        }), 500
 
 
 # ROUTE: Update (Refactored for 2PC)
