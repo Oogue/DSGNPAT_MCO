@@ -231,7 +231,7 @@ async function submitUpdate() {
     const titleId = document.getElementById('edit-titleid').value;
     const ordering = document.getElementById('edit-ordering').value;
     const title = document.getElementById('edit-title').value;
-
+    const region = movie.region;
     // Validate
     if (!ordering || !title) {
         alert('Please fill in all required fields');
@@ -241,7 +241,8 @@ async function submitUpdate() {
     const payload = {
         titleId: titleId,
         ordering: parseInt(ordering),
-        title: title
+        title: title,
+        region: movie.region
     };
 
     console.log('Updating:', payload);
