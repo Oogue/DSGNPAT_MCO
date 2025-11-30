@@ -138,6 +138,104 @@ def _final_commit_or_abort(conn, commit=True):
 # NOTE: The original execute_query (which calls conn.commit()) is now redundant for 
 # 2PC but is retained for old functions or read queries.    
     
+    
+# --- NEW HELPER: Core Recovery Logic ---
+def _execute_recovery_cycle():
+    """
+    Contains the logic to scan and recover failed replications.
+    Creates its own DB connection to ensure thread safety when called 
+    from background threads.
+    """
+    # Create a fresh connection for this cycle
+    conn = get_db_connection(LOCAL_NODE_KEY)
+    if not conn:
+        return {"success": False, "error": "Could not connect to local DB for recovery"}
+
+    try:
+        # Use a temporary Log Manager with the fresh connection
+        temp_log_manager = DistributedLogManager(LOCAL_NODE_ID, conn)
+        
+        # 1. Get failed logs
+        failed_txns = temp_log_manager.get_failed_replications()
+        if not failed_txns:
+            return {"success": True, "count": 0, "message": "No failed replications found."}
+            
+        recovery_logs = []
+        recovered_count = 0
+        
+        for txn in failed_txns:
+            txn_id = txn['transaction_id']
+            target_node = txn['replication_target']
+            payload = json.loads(txn['new_value'])
+            op_type = txn['operation_type']
+            
+            # If target wasn't set, determine it now
+            if not target_node:
+                region = payload.get('region')
+                if LOCAL_NODE_KEY == 'node1':
+                    target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+                else:
+                    target_node = 'node1'
+            
+            recovery_logs.append(f"Recovering Txn {txn_id} -> Target: {target_node}...")
+            
+            # Re-construct Query (Only supporting INSERT for this test)
+            if op_type == 'INSERT':
+                query = """
+                    INSERT INTO movies 
+                    (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE title=title 
+                """
+                # ^ ON DUPLICATE KEY UPDATE makes it idempotent!
+                
+                params = (
+                    payload.get('titleId'), payload.get('ordering'), payload.get('title'), 
+                    payload.get('region'), payload.get('language'), payload.get('types'), 
+                    payload.get('attributes'), payload.get('isOriginalTitle')
+                )
+                
+                # Execute Retry
+                res = execute_query(target_node, query, params)
+                
+                if res['success']:
+                    temp_log_manager.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+                    recovery_logs.append(f" -> Success: Replicated to {target_node}.")
+                    recovered_count += 1
+                else:
+                    recovery_logs.append(f" -> Failed again: {res.get('error')}")
+        
+        return {
+            "success": True,
+            "count": recovered_count,
+            "total_found": len(failed_txns),
+            "details": recovery_logs
+        }
+        
+    except Exception as e:
+        print(f"Error in recovery cycle: {e}")
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+        
+# --- BACKGROUND TASK ---
+def start_background_recovery():
+    def task():
+        print("Background Recovery Thread Started (Interval: 15s)")
+        while True:
+            time.sleep(15)
+            try:
+                # Silently run recovery
+                result = _execute_recovery_cycle()
+                if result['success'] and result.get('count', 0) > 0:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] AUTO-RECOVERY: Recovered {result['count']} transactions.")
+            except Exception as e:
+                print(f"Background Recovery Error: {e}")
+                
+    # Daemon thread ensures it dies when the main app stops
+    thread = threading.Thread(target=task, daemon=True)
+    thread.start()
+
 # Frontend / Homepage
 @app.route('/')
 def index(): 
@@ -730,4 +828,5 @@ def report_types():
         conn.close()
 
 if __name__ == '__main__':
+    start_background_recovery()
     app.run(host='0.0.0.0', port=80)
