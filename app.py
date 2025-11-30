@@ -290,7 +290,8 @@ def get_movies():
         params.append(f"%{region}%")
 
     target_node = requested_node
-    conn = get_db_connection(target_node, GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
+    current_iso_level = GLOBAL_SETTINGS['isolation_level']
+    conn = get_db_connection(target_node, isolation_level=current_iso_level, autocommit_conn=True)
     
     rows = []
     total_count = 0
