@@ -72,8 +72,12 @@ async function fetchMovies() {
         }
         
         // Populate table with data
+        // Populate table with data
         result.data.forEach(movie => {
             const row = document.createElement('tr');
+            // FIX: Ensure quotes don't break HTML if data contains quotes
+            const safeMovie = JSON.stringify(movie).replace(/"/g, '&quot;');
+            
             row.innerHTML = `
                 <td title="${movie.titleId || 'N/A'}">${movie.titleId || 'N/A'}</td>
                 <td>${movie.ordering || 'N/A'}</td>
@@ -84,8 +88,9 @@ async function fetchMovies() {
                 <td title="${movie.attributes || 'N/A'}">${movie.attributes || 'N/A'}</td>
                 <td>${movie.isOriginalTitle == 1 ? 'Yes' : 'No'}</td>
                 <td>
-                    <button onclick='editRow(${JSON.stringify(movie)})'>Edit</button>
-                    <button class="delete-button" onclick="deleteRow('${movie.titleId}')">Delete</button>
+                    <button onclick='editRow(${safeMovie})'>Edit</button>
+                    <!-- OPTIONAL: Pass region to deleteRow too if you want to optimize delete -->
+                    <button class="delete-button" onclick="deleteRow('${movie.titleId}', '${movie.region || ''}')">Delete</button>
                 </td>
             `;
             tableBody.appendChild(row);
