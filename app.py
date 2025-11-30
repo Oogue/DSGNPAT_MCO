@@ -144,21 +144,12 @@ def _final_commit_or_abort(conn, commit=True):
     
 # --- NEW HELPER: Core Recovery Logic ---
 def _execute_recovery_cycle():
-    """
-    Contains the logic to scan and recover failed replications.
-    Creates its own DB connection to ensure thread safety when called 
-    from background threads.
-    """
-    # Create a fresh connection for this cycle
     conn = get_db_connection(LOCAL_NODE_KEY)
     if not conn:
         return {"success": False, "error": "Could not connect to local DB for recovery"}
 
     try:
-        # Use a temporary Log Manager with the fresh connection
         temp_log_manager = DistributedLogManager(LOCAL_NODE_ID, conn)
-        
-        # 1. Get failed logs
         failed_txns = temp_log_manager.get_failed_replications()
         if not failed_txns:
             return {"success": True, "count": 0, "message": "No failed replications found."}
@@ -169,20 +160,33 @@ def _execute_recovery_cycle():
         for txn in failed_txns:
             txn_id = txn['transaction_id']
             target_node = txn['replication_target']
-            payload = json.loads(txn['new_value'])
+            try:
+                payload = json.loads(txn['new_value'])
+            except:
+                payload = {}
+                
             op_type = txn['operation_type']
+            region = payload.get('region')
             
-            # If target wasn't set, determine it now
-            if not target_node:
-                region = payload.get('region')
-                if LOCAL_NODE_KEY == 'node1':
-                    target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-                else:
+            # --- IMPROVED TARGET LOGIC ---
+            if not target_node or str(target_node) == '0':
+                primary = 'node2' if region in ['US', 'JP'] else 'node3'
+                if LOCAL_NODE_KEY == primary:
                     target_node = 'node1'
+                elif LOCAL_NODE_KEY == 'node1':
+                    target_node = primary
+                else:
+                    target_node = 'node1' 
             
-            recovery_logs.append(f"Recovering Txn {txn_id} -> Target: {target_node}...")
+            target_node = str(target_node)
+            if target_node.isdigit(): 
+                target_node = f"node{target_node}"
+
+            recovery_logs.append(f"Recovering Txn {txn_id} ({op_type}) -> Target: {target_node}...")
             
-            # Re-construct Query (Only supporting INSERT for this test)
+            res = {'success': False, 'error': 'Unknown Op'}
+
+            # --- RECOVERY HANDLER: INSERT ---
             if op_type == 'INSERT':
                 query = """
                     INSERT INTO movies 
@@ -190,23 +194,35 @@ def _execute_recovery_cycle():
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE title=title 
                 """
-                # ^ ON DUPLICATE KEY UPDATE makes it idempotent!
-                
                 params = (
                     payload.get('titleId'), payload.get('ordering'), payload.get('title'), 
                     payload.get('region'), payload.get('language'), payload.get('types'), 
                     payload.get('attributes'), payload.get('isOriginalTitle')
                 )
-                
-                # Execute Retry
+                res = execute_query(target_node, query, params)
+
+            # --- RECOVERY HANDLER: UPDATE ---
+            elif op_type == 'UPDATE':
+                query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
+                params = (
+                    payload.get('title'), 
+                    payload.get('ordering'), 
+                    payload.get('titleId')
+                )
+                res = execute_query(target_node, query, params)
+
+            # --- RECOVERY HANDLER: DELETE ---
+            elif op_type == 'DELETE':
+                query = "DELETE FROM movies WHERE titleId = %s"
+                params = (payload.get('titleId'),)
                 res = execute_query(target_node, query, params)
                 
-                if res['success']:
-                    temp_log_manager.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
-                    recovery_logs.append(f" -> Success: Replicated to {target_node}.")
-                    recovered_count += 1
-                else:
-                    recovery_logs.append(f" -> Failed again: {res.get('error')}")
+            if res['success']:
+                temp_log_manager.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+                recovery_logs.append(f" -> Success: Replicated to {target_node}.")
+                recovered_count += 1
+            else:
+                recovery_logs.append(f" -> Failed again: {res.get('error')}")
         
         return {
             "success": True,
@@ -219,7 +235,8 @@ def _execute_recovery_cycle():
         print(f"Error in recovery cycle: {e}")
         return {"success": False, "error": str(e)}
     finally:
-        conn.close()
+        if conn: conn.close()
+        
         
 # --- BACKGROUND TASK ---
 def start_background_recovery():
@@ -519,198 +536,210 @@ def insert_movie():
             "details": str(e)
         }), 500
 
-
-# ROUTE: Update (Refactored for 2PC)
+# --- ROUTE: Update (Failover Logic) ---
 @app.route('/update', methods=['POST'])
 def update_movie():
-    # Ensure the LOG_MANAGER is available (from global instantiation)
-    if not LOG_MANAGER:
-        return jsonify({"error": "Distributed Log Manager not initialized."}), 500
-
-    data = request.json
-    current_node = request.args.get('node', data.get('node', 'node1'))
-    
-    # 1. Transaction Setup & Log Data Preparation
-    txn_id = str(uuid.uuid4()) 
-    record_key = data.get('titleId')
-    title_id = data.get('titleId')
-    new_title = data.get('title')
-    new_ordering = data.get('ordering')
-
-    # Prepare the 'new_value' payload for the log (After Image)
-    new_value = {
-        'titleId': record_key,
-        'ordering': new_ordering,
-        'title': new_title,
-        # IMPORTANT: Include other updated fields if necessary for REDO
-    }
-    
-    query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
-    params = (new_title, new_ordering, title_id)
-    
-    logs = []
-
-    # --- 1. IDENTIFY ALL PARTICIPANTS (REQUIRED STEP FOR 2PC) ---
-    participants = set()
-    # Central node always participates (or is the entry point)
-    participants.add('node1') 
-    # Both fragment nodes must participate in an UPDATE, as the location is unknown
-    participants.add('node2') 
-    participants.add('node3')
-    
-    # Add the current coordinator node if it's not already in the set (it will be)
-    participants.add(current_node)
-
-    active_connections = {}
-    all_ready = True
-    
-    # ------------------------------------------------------------------
-    # PHASE 1: PREPARE AND LOG READY STATUS (THE LOOP)
-    # ------------------------------------------------------------------
     try:
-        # Coordinator logs PREPARE START
-        LOG_MANAGER.log_prepare_start(txn_id)
-        logs.append("Coordinator: Logged PREPARE START.")
-        
-        # --- THE REQUIRED LOOP ITERATING OVER ALL PARTICIPANTS ---
-        for p_key in participants:
-            # --- 1. Perform DB Write (NO COMMIT) ---
-            # NOTE: We use the prepare_write helper (which manages the connection)
-            res_prepare = _prepare_write(p_key, query, params)
-            
-            if res_prepare['success']:
-                # 2. Log READY status on the coordinator's log for each successful prepare
-                LOG_MANAGER.log_ready_status(txn_id, 'UPDATE', record_key, new_value)
-                logs.append(f"{p_key}: Prepared write & Logged READY_COMMIT (Transaction held).")
-                active_connections[p_key] = res_prepare['connection'] # Save the open connection
-            else:
-                # One participant failed to prepare. Global abort is inevitable.
-                logs.append(f"{p_key}: Failed to Prepare: {res_prepare.get('error')}. ABORTING.")
-                all_ready = False
-                # Immediately close failed connection
-                if 'connection' in res_prepare: _final_commit_or_abort(res_prepare['connection'], commit=False)
-                break
-        
-    except Exception as e:
-        all_ready = False
-        logs.append(f"CRITICAL FAILURE during PREPARE phase: {e}")
+        if not LOG_MANAGER:
+            return jsonify({"error": "Distributed Log Manager not initialized."}), 503
+        if not request.json:
+             return jsonify({"error": "Missing JSON body"}), 400
 
-    # ------------------------------------------------------------------
-    # PHASE 2: GLOBAL COMMIT/ABORT DECISION (THE SECOND LOOP)
-    # ------------------------------------------------------------------
-    final_decision = all_ready
-    
-    # 1. Coordinator logs GLOBAL_COMMIT/ABORT (The irrevocable decision)
-    log_res = LOG_MANAGER.log_global_commit(txn_id, commit=final_decision)
-    if not log_res['success']:
-        # This is a critical logging failure. Must force abort.
-        final_decision = False 
-        logs.append("CRITICAL: Global Log Failure. FORCING ABORT.")
+        data = request.json
+        txn_id = str(uuid.uuid4())
         
-    # 2. Coordinator sends final commit/abort signal to all open connections
-    for node_key, conn in active_connections.items():
-        commit_res = _final_commit_or_abort(conn, commit=final_decision)
-        logs.append(f"{node_key}: Final Decision - {'COMMIT' if final_decision else 'ABORT'} ({commit_res['status']})")
+        title_id = data.get('titleId')
+        # We assume region is passed for routing; if not, we might default to Node 3 or need logic
+        region = data.get('region') 
+        new_title = data.get('title')
+        new_ordering = data.get('ordering')
         
-    return jsonify({
-        "message": "Update Processed via 2PC", 
-        "decision": "COMMITTED" if final_decision else "ABORTED",
-        "logs": logs,
-        "txn_id": txn_id
-    })
+        print(f"\n--- PROCESSING UPDATE: {title_id} ---")
+        
+        params = (new_title, new_ordering, title_id)
+        
+        query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
+
+        # 1. Determine Nodes (Same logic as Insert)
+        # If region is missing, this logic might default to node3. 
+        # In a real app, we'd query Central to find the region first, but that adds latency.
+        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+        replication_target_node = 'node1' if primary_target_node != 'node1' else None
+        
+        print(f"   [DECISION] Primary: {primary_target_node}, Secondary: {replication_target_node}")
+
+        logs = []
+        
+        # --- PHASE 1: PRIMARY COMMIT ---
+        logs.append(f"Step 1: Attempting PRIMARY UPDATE to {primary_target_node}...")
+        res_primary = execute_query(primary_target_node, query, params)
+        
+        # Log the transaction
+        # Important: Store all data needed for REDO in 'new_value'
+        new_value = {
+            'titleId': title_id,
+            'ordering': new_ordering,
+            'title': new_title,
+            'region': region # Stored for recovery routing
+        }
+        LOG_MANAGER.log_local_commit(txn_id, 'UPDATE', title_id, new_value)
+        
+        primary_success = False
+        if res_primary['success']:
+            primary_success = True
+            logs.append(f"Step 1 Success: Updated {primary_target_node}.")
+        else:
+            primary_success = False
+            logs.append(f"Step 1 Failed: {res_primary.get('error')}")
+            
+            # Point log to failed primary
+            LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
+            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+            
+            logs.append(f"Action: Log updated. Recovery will retry {primary_target_node} later.")
+
+        # --- PHASE 2: REPLICATION / BACKUP ---
+        final_status = "FULLY_COMMITTED"
+        
+        if replication_target_node:
+            logs.append(f"Step 2: Proceeding to Node 1 ({replication_target_node})...")
+            
+            res_replica = execute_query(replication_target_node, query, params)
+            
+            if res_replica['success']:
+                logs.append(f"Step 2 Success: Updated {replication_target_node}.")
+                
+                if primary_success:
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+                else:
+                    final_status = "PRIMARY_FAILED_BACKUP_SUCCESS"
+                    logs.append("Info: Transaction saved on Backup Node only. Primary recovery pending.")
+            else:
+                logs.append(f"Step 2 Failed: {res_replica.get('error')}")
+                
+                if primary_success:
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+                    final_status = "PRIMARY_ONLY_REPLICATION_PENDING"
+                else:
+                    final_status = "TOTAL_FAILURE_PENDING_RECOVERY"
+
+        return jsonify({
+            "status": final_status,
+            "txn_id": txn_id,
+            "logs": logs,
+            "primary_node": primary_target_node,
+            "replication_node": replication_target_node
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "status": "CRASH",
+            "error": "Internal Server Error trapped",
+            "details": str(e)
+        }), 500
     
-    
-# ROUTE: Delete (Refactored for 2PC)
+    # --- ROUTE: Delete (Failover Logic) ---
 @app.route('/delete', methods=['POST'])
 def delete_movie():
-    # Ensure the LOG_MANAGER is available
-    if not LOG_MANAGER:
-        return jsonify({"error": "Distributed Log Manager not initialized."}), 500
-
-    data = request.json
-    current_node = request.args.get('node', data.get('node', 'node1'))
-    
-    # 1. Transaction Setup & Log Data Preparation
-    txn_id = str(uuid.uuid4())
-    record_key = data.get('titleId')
-    title_id = data.get('titleId')
-    
-    # For a DELETE operation (REDO only), we log the key and the operation type.
-    new_value = {"action": "DELETE", "titleId": title_id}
-
-    query = "DELETE FROM movies WHERE titleId = %s"
-    params = (title_id,)
-    
-    logs = []
-
-    # --- 1. IDENTIFY ALL PARTICIPANTS (REQUIRED STEP FOR 2PC) ---
-    participants = set()
-    # Central node always participates
-    participants.add('node1') 
-    # Both fragment nodes must participate in a DELETE to ensure the record is removed everywhere
-    participants.add('node2') 
-    participants.add('node3')
-    
-    # The coordinating node must also be in the set
-    participants.add(current_node)
-
-    active_connections = {}
-    all_ready = True
-    
-    # ------------------------------------------------------------------
-    # PHASE 1: PREPARE AND LOG READY STATUS (THE LOOP)
-    # ------------------------------------------------------------------
     try:
-        # Coordinator logs PREPARE START
-        LOG_MANAGER.log_prepare_start(txn_id)
-        logs.append("Coordinator: Logged PREPARE START.")
-        
-        # --- THE REQUIRED LOOP ITERATING OVER ALL PARTICIPANTS ---
-        for p_key in participants:
-            # --- 1. Perform DB Write (NO COMMIT) ---
-            # This executes the DELETE statement but holds the transaction open
-            res_prepare = _prepare_write(p_key, query, params)
-            
-            if res_prepare['success']:
-                # 2. Log READY status on the coordinator's log for each successful prepare
-                LOG_MANAGER.log_ready_status(txn_id, 'DELETE', record_key, new_value)
-                logs.append(f"{p_key}: Prepared delete & Logged READY_COMMIT (Transaction held).")
-                active_connections[p_key] = res_prepare['connection'] # Save the open connection
-            else:
-                # One participant failed to prepare. Global abort is inevitable.
-                logs.append(f"{p_key}: Failed to Prepare: {res_prepare.get('error')}. ABORTING.")
-                all_ready = False
-                # Immediately close failed connection
-                if 'connection' in res_prepare: _final_commit_or_abort(res_prepare['connection'], commit=False)
-                break
-        
-    except Exception as e:
-        all_ready = False
-        logs.append(f"CRITICAL FAILURE during PREPARE phase: {e}")
+        if not LOG_MANAGER:
+            return jsonify({"error": "Distributed Log Manager not initialized."}), 503
+        if not request.json:
+             return jsonify({"error": "Missing JSON body"}), 400
 
-    # ------------------------------------------------------------------
-    # PHASE 2: GLOBAL COMMIT/ABORT DECISION (THE SECOND LOOP)
-    # ------------------------------------------------------------------
-    final_decision = all_ready
-    
-    # 1. Coordinator logs GLOBAL_COMMIT/ABORT (The irrevocable decision)
-    log_res = LOG_MANAGER.log_global_commit(txn_id, commit=final_decision)
-    if not log_res['success']:
-        # This is a critical logging failure. Must force abort.
-        final_decision = False 
-        logs.append("CRITICAL: Global Log Failure. FORCING ABORT.")
+        data = request.json
+        txn_id = str(uuid.uuid4())
         
-    # 2. Coordinator sends final commit/abort signal to all open connections
-    for node_key, conn in active_connections.items():
-        commit_res = _final_commit_or_abort(conn, commit=final_decision)
-        logs.append(f"{node_key}: Final Decision - {'COMMIT' if final_decision else 'ABORT'} ({commit_res['status']})")
+        title_id = data.get('titleId')
+        # We assume region is passed for routing to determine primary
+        region = data.get('region') 
         
-    return jsonify({
-        "message": "Delete Processed via 2PC", 
-        "decision": "COMMITTED" if final_decision else "ABORTED",
-        "logs": logs,
-        "txn_id": txn_id
-    })
+        print(f"\n--- PROCESSING DELETE: {title_id} ---")
+        
+        params = (title_id,)
+        
+        query = "DELETE FROM movies WHERE titleId = %s"
+
+        # 1. Determine Nodes (Same logic as Insert/Update)
+        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+        replication_target_node = 'node1' if primary_target_node != 'node1' else None
+        
+        print(f"   [DECISION] Primary: {primary_target_node}, Secondary: {replication_target_node}")
+
+        logs = []
+        
+        # --- PHASE 1: PRIMARY COMMIT ---
+        logs.append(f"Step 1: Attempting PRIMARY DELETE on {primary_target_node}...")
+        res_primary = execute_query(primary_target_node, query, params)
+        
+        # Log the transaction
+        new_value = {
+            'action': 'DELETE',
+            'titleId': title_id,
+            'region': region 
+        }
+        LOG_MANAGER.log_local_commit(txn_id, 'DELETE', title_id, new_value)
+        
+        primary_success = False
+        if res_primary['success']:
+            primary_success = True
+            logs.append(f"Step 1 Success: Deleted from {primary_target_node}.")
+        else:
+            primary_success = False
+            logs.append(f"Step 1 Failed: {res_primary.get('error')}")
+            
+            # Point log to failed primary
+            LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
+            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+            
+            logs.append(f"Action: Log updated. Recovery will retry {primary_target_node} later.")
+
+        # --- PHASE 2: REPLICATION / BACKUP ---
+        final_status = "FULLY_COMMITTED"
+        
+        if replication_target_node:
+            logs.append(f"Step 2: Proceeding to Node 1 ({replication_target_node})...")
+            
+            res_replica = execute_query(replication_target_node, query, params)
+            
+            if res_replica['success']:
+                logs.append(f"Step 2 Success: Deleted from {replication_target_node}.")
+                
+                if primary_success:
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+                else:
+                    final_status = "PRIMARY_FAILED_BACKUP_SUCCESS"
+                    logs.append("Info: Transaction saved on Backup Node only. Primary recovery pending.")
+            else:
+                logs.append(f"Step 2 Failed: {res_replica.get('error')}")
+                
+                if primary_success:
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+                    final_status = "PRIMARY_ONLY_REPLICATION_PENDING"
+                else:
+                    final_status = "TOTAL_FAILURE_PENDING_RECOVERY"
+
+        return jsonify({
+            "status": final_status,
+            "txn_id": txn_id,
+            "logs": logs,
+            "primary_node": primary_target_node,
+            "replication_node": replication_target_node
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "status": "CRASH",
+            "error": "Internal Server Error trapped",
+            "details": str(e)
+        }), 500
+
     
 # ROUTE: Simulate Concurrency
 @app.route('/simulate-concurrency', methods=['POST'])
