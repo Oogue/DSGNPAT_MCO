@@ -242,135 +242,184 @@ def get_movies():
         "total": total_count,
         "source_node": source
     })
+    
+# --- ROUTE: Recovery (Manual Trigger for Testing) ---
+@app.route('/recover-replication', methods=['POST'])
+def run_recovery():
+    """
+    Scans the local logs for failed replications and tries to re-apply them.
+    This simulates a background recovery process.
+    """
+    if not LOG_MANAGER:
+        return jsonify({"error": "Log Manager not ready"}), 500
+        
+    # 1. Get failed logs
+    failed_txns = LOG_MANAGER.get_failed_replications()
+    if not failed_txns:
+        return jsonify({"message": "No failed replications found."})
+        
+    recovery_logs = []
+    recovered_count = 0
+    
+    for txn in failed_txns:
+        txn_id = txn['transaction_id']
+        target_node = txn['replication_target']
+        payload = json.loads(txn['new_value'])
+        op_type = txn['operation_type']
+        
+        # If target wasn't set (e.g., crashed during local commit logging), determine it now
+        if not target_node:
+            region = payload.get('region')
+            if LOCAL_NODE_KEY == 'node1':
+                target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+            else:
+                target_node = 'node1'
+        
+        recovery_logs.append(f"Recovering Txn {txn_id} -> Target: {target_node}...")
+        
+        # Re-construct Query (Only supporting INSERT for this test)
+        if op_type == 'INSERT':
+            query = """
+                INSERT INTO movies 
+                (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE title=title 
+            """
+            # ^ ON DUPLICATE KEY UPDATE makes it idempotent! Important for recovery.
+            
+            params = (
+                payload.get('titleId'), payload.get('ordering'), payload.get('title'), 
+                payload.get('region'), payload.get('language'), payload.get('types'), 
+                payload.get('attributes'), payload.get('isOriginalTitle')
+            )
+            
+            # Execute Retry
+            res = execute_query(target_node, query, params)
+            
+            if res['success']:
+                LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+                recovery_logs.append(f" -> Success: Replicated to {target_node}.")
+                recovered_count += 1
+            else:
+                recovery_logs.append(f" -> Failed again: {res.get('error')}")
+    
+    return jsonify({
+        "message": f"Recovery run complete. Recovered {recovered_count}/{len(failed_txns)} items.",
+        "details": recovery_logs
+    })
 
-# ROUTE: Insert (Corrected 2PC Implementation)
+
+# --- ROUTE: Insert (Local Commit First Strategy) ---
 @app.route('/insert', methods=['POST'])
 def insert_movie():
-    # ... (Initialization, data setup, query, and partition logic remains the same) ...
     if not LOG_MANAGER:
         return jsonify({"error": "Distributed Log Manager not initialized."}), 500
 
     data = request.json
-
+    
+    # 1. Transaction Setup
     txn_id = str(uuid.uuid4())
-    record_key = data.get('titleId')
-
-    # Prepare the 'new_value' payload for the log (After Image)
-    new_value = {
-        'titleId': record_key,
-        'ordering': data.get('ordering'),
-        'title': data.get('title'),
-        'region': data.get('region'),
-        'language': data.get('language'),
-        'types': data.get('types'),
-        'attributes': data.get('attributes'),
-        'isOriginalTitle': data.get('isOriginalTitle')
-    }
-    # ------------------------------------------------------------------
-
-    # Determine current node
-    current_node = request.args.get('node', data.get('node', 'node1'))
-
+    
+    # Prepare Data
+    title_id = data.get('titleId')
+    region = data.get('region')
+    
     params = (
-        data.get('titleId'),
-        data.get('ordering'),
-        data.get('title'),
-        data.get('region'),
-        data.get('language'),
-        data.get('types'),
-        data.get('attributes'),
-        data.get('isOriginalTitle')
+        title_id, data.get('ordering'), data.get('title'), region, 
+        data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle')
     )
-
+    
+    # Define the Query
     query = """
         INSERT INTO movies 
         (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) 
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
 
-    # Determine Correct Partition
-    target_region = data.get('region')
-    correct_fragment_key = 'node3' 
-    correct_fragment_id = 3
-    if target_region in ['US', 'JP']: 
-        correct_fragment_key = 'node2'
-        correct_fragment_id = 2
-
-    # logs for CONSOLE output
-    logs = []
-    # Determine Correct Partition
-    target_region = data.get('region')
-    correct_fragment_key = 'node3' 
-    if target_region in ['US', 'JP']: 
-        correct_fragment_key = 'node2'
-
-    # --- 1. IDENTIFY ALL PARTICIPANTS (REQUIRED STEP FOR 2PC) ---
-    participants = set()
-    # The coordinating node must commit locally
-    participants.add(current_node)
-    # The central node must commit
-    participants.add('node1')
-    # The target fragment node must commit
-    participants.add(correct_fragment_key)
-
-    logs = []
-    active_connections = {}
-    all_ready = True
+    # 2. Determine Logic based on Location (Fragmentation Rules)
+    # Rules:
+    # - US/JP -> Stored in Node 2
+    # - Others -> Stored in Node 3
+    # - Node 1 -> Stores EVERYTHING (Central)
     
-    # ------------------------------------------------------------------
-    # PHASE 1: PREPARE AND LOG READY STATUS (THE LOOP)
-    # ------------------------------------------------------------------
-    try:
-        # Coordinator logs PREPARE START
-        LOG_MANAGER.log_prepare_start(txn_id)
-        logs.append("Coordinator: Logged PREPARE START.")
-        
-        # --- THE REQUIRED LOOP ITERATING OVER ALL PARTICIPANTS ---
-        for p_key in participants:
-            # --- 1. Perform DB Write (NO COMMIT) ---
-            # This is the request sent from the coordinator to the participant
-            res_prepare = _prepare_write(p_key, query, params) # <-- CALL HERE!
-            
-            if res_prepare['success']:
-                # 2. Log READY status (Coordinator logs success status for this participant)
-                LOG_MANAGER.log_ready_status(txn_id, 'INSERT', record_key, new_value)
-                logs.append(f"{p_key}: Prepared write & Logged READY_COMMIT (Transaction held).")
-                active_connections[p_key] = res_prepare['connection'] # Save the open connection
-            else:
-                # One participant failed to prepare. Global abort is inevitable.
-                logs.append(f"{p_key}: Failed to Prepare: {res_prepare.get('error')}. ABORTING.")
-                all_ready = False
-                # Immediately close failed connection
-                if 'connection' in res_prepare: _final_commit_or_abort(res_prepare['connection'], commit=False)
-                break
-        
-    except Exception as e:
-        all_ready = False
-        logs.append(f"CRITICAL FAILURE during PREPARE phase: {e}")
-
-    # ------------------------------------------------------------------
-    # PHASE 2: GLOBAL COMMIT/ABORT DECISION (THE SECOND LOOP)
-    # ------------------------------------------------------------------
-    final_decision = all_ready
+    target_fragment = 'node2' if region in ['US', 'JP'] else 'node3'
     
-    # 1. Coordinator logs GLOBAL_COMMIT/ABORT (The irrevocable decision)
-    log_res = LOG_MANAGER.log_global_commit(txn_id, commit=final_decision)
-    if not log_res['success']:
-        # This is a critical logging failure. Must force abort.
-        final_decision = False 
-        logs.append("CRITICAL: Global Log Failure. FORCING ABORT.")
-        
-    # 2. Coordinator sends final commit/abort signal to all open connections
-    # --- THE REQUIRED LOOP FOR FINAL EXECUTION ---
-    for node_key, conn in active_connections.items():
-        commit_res = _final_commit_or_abort(conn, commit=final_decision) # <-- CALL HERE!
-        logs.append(f"{node_key}: Final Decision - {'COMMIT' if final_decision else 'ABORT'} ({commit_res['status']})")
-        
+    # Identify "Local" vs "Remote"
+    # The 'primary_target' is where the data MUST exist.
+    # If we are Node 1, we save locally, then replicate to fragment.
+    # If we are Fragment, we save locally, then replicate to Node 1.
+    
+    replication_target_node = None
+    
+    if LOCAL_NODE_KEY == 'node1':
+        # We are Central. 
+        # Local Write: YES.
+        # Remote Write: To the specific fragment.
+        replication_target_node = target_fragment
+    else:
+        # We are a Fragment (Node 2 or 3).
+        # Check if this data actually belongs to us.
+        if LOCAL_NODE_KEY == target_fragment:
+            # It belongs here.
+            # Local Write: YES.
+            # Remote Write: To Central (Node 1).
+            replication_target_node = 'node1'
+        else:
+            # Edge Case: User sent a "US" movie to Node 3.
+            # In a strict system, we might reject or forward. 
+            # For this test, we will try to write to Node 3 (as misplaced data) 
+            # OR we can reject. Let's assume we proceed but replicate to Central.
+            replication_target_node = 'node1'
+
+    logs = []
+    
+    # --- PHASE 1: LOCAL COMMIT ---
+    logs.append(f"Step 1: Attempting LOCAL COMMIT to {LOCAL_NODE_KEY}...")
+    
+    local_res = execute_query(LOCAL_NODE_KEY, query, params)
+    
+    if not local_res['success']:
+        # If local commit fails, the whole thing fails. Client receives error.
+        return jsonify({
+            "status": "FAILURE", 
+            "stage": "LOCAL_COMMIT", 
+            "error": local_res['error'],
+            "logs": logs
+        }), 500
+    
+    # Log the successful local commit to DB
+    # We store the 'new_value' in JSON for recovery purposes later
+    new_value = data
+    LOG_MANAGER.log_local_commit(txn_id, 'INSERT', title_id, new_value)
+    logs.append("Step 1 Success: Local DB write & Log Entry created.")
+
+    # --- PHASE 2: REPLICATION (Best Effort) ---
+    logs.append(f"Step 2: Attempting REPLICATION to {replication_target_node}...")
+    
+    # Update log status to PENDING
+    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+    
+    # Attempt Remote Write
+    remote_res = execute_query(replication_target_node, query, params)
+    
+    if remote_res['success']:
+        # Update Log to SUCCESS
+        LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+        logs.append(f"Step 2 Success: Replicated to {replication_target_node}.")
+        final_status = "FULLY_COMMITTED"
+    else:
+        # Update Log to FAILED
+        LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+        logs.append(f"Step 2 Failed: Could not write to {replication_target_node}. Error: {remote_res.get('error')}")
+        logs.append("Action: Marked as REPLICATION_FAILED in logs. Background recovery will handle it.")
+        final_status = "LOCAL_ONLY_REPLICATION_PENDING"
+
     return jsonify({
-        "message": "Transaction Processed via 2PC", 
-        "decision": "COMMITTED" if final_decision else "ABORTED",
+        "status": final_status,
+        "txn_id": txn_id,
         "logs": logs,
-        "txn_id": txn_id
+        "local_rows": local_res['rows_affected'],
+        "replication_error": remote_res.get('error') if not remote_res['success'] else None
     })
 
 
