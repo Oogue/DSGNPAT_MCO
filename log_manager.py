@@ -283,36 +283,3 @@ class DistributedLogManager:
             cursor.close()
 # --- Example Usage and Simulation ---
 
-def simulate_failure_recovery(log_manager_central, log_manager_fabric):
-    """Simulates Case #1 and Case #2/4 using the Log Manager."""
-    
-    # 1. Simulate a successful local transaction on a Fabric Node (N2)
-    txn1_id = str(uuid.uuid4())
-    log_manager_fabric.log_local_commit(txn1_id, 'UPDATE', 'R42', {"price": 150.0})
-    
-    # 2. Simulate **Case #1** (Replication from Node 2 to Central Node Fails)
-    log_manager_fabric.log_replication_attempt(txn1_id, 1)
-    
-    # Simulate a network or DB failure on Node 1
-    # Node 2 logs the failure and holds the log for retry
-    log_manager_fabric.update_replication_status(txn1_id, 1, success=False)
-    
-    print("\n--- Simulating Node 1 (Central Node) Crash ---")
-    last_commit_time_N1 = datetime.now()
-    
-    # A successful transaction occurs on Node 2 while Node 1 is down
-    txn2_id = str(uuid.uuid4())
-    log_manager_fabric.log_local_commit(txn2_id, 'INSERT', 'R50', {"name": "New Item"})
-    log_manager_fabric.update_replication_status(txn2_id, 1, success=False) # Replication fails because N1 is down
-
-    # 3. Simulate **Case #2** (Central Node Recovers and missed transactions)
-    print(f"\n--- Simulating Central Node (Node 1) Recovering ---")
-    log_manager_central.recover_missed_writes(last_commit_time_N1)
-    # The recovery logic here would look at the logs of N2 and N3 to find txn2_id and re-apply it.
-
-# Initialize the log managers (assuming they connect to their respective DBs)
-log_manager_N1 = DistributedLogManager(node_id=1, db_connection=get_db_connection('node1'))
-log_manager_N2 = DistributedLogManager(node_id=2, db_connection=get_db_connection('node2'))
-
-# Run the simulation
-simulate_failure_recovery(log_manager_N1, log_manager_N2)
