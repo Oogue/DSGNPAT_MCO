@@ -85,64 +85,8 @@ def get_last_update(node_key):
     # For now, return current timestamp
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-# --- NEW HELPER FUNCTIONS in app.py ---
 
-def _prepare_write(node_key, query, params=None):
-    """
-    Phase 1: Executes the write query but DOES NOT commit. 
-    It holds the transaction open until final_commit_or_abort is called.
     
-    NOTE: For simplicity, we are committing the prepare log here, but the data 
-    write is left uncommitted.
-    """
-    conn = get_db_connection(node_key)
-    if not conn:
-        return {"success": False, "error": "Connection failed"}
-    
-    try:
-        # NOTE: A real system would use a distributed transaction manager to track 
-        # this connection/transaction context. Here we rely on the connection object.
-        cursor = conn.cursor()
-        cursor.execute(query, params or ())
-        
-        rows_affected = cursor.rowcount
-        cursor.close() 
-        # Crucial: DO NOT conn.commit() here
-        
-        # Return the open connection to be managed by the calling route/coordinator
-        return {"success": True, "rows_affected": rows_affected, "connection": conn}
-    
-    except Exception as e:
-        if conn: conn.close()
-        return {"success": False, "error": str(e), "rows_affected": 0}
-
-def _final_commit_or_abort(conn, commit=True):
-    """
-    Phase 2: Performs the actual database commit or rollback based on 
-    the coordinator's global decision.
-    """
-    if not conn:
-        return {"success": False, "error": "No active connection/transaction"}
-    
-    try:
-        if commit:
-            conn.commit()
-            status = "COMMIT_SUCCESS"
-        else:
-            conn.rollback()
-            status = "ABORT_SUCCESS"
-            
-        conn.close()
-        return {"success": True, "status": status}
-    except Exception as e:
-        conn.close()
-        return {"success": False, "status": "FINAL_COMMIT_ERROR", "error": str(e)}
-
-# NOTE: The original execute_query (which calls conn.commit()) is now redundant for 
-# 2PC but is retained for old functions or read queries.    
-    
-    
-# --- NEW HELPER: Core Recovery Logic ---
 def _execute_recovery_cycle():
     conn = get_db_connection(LOCAL_NODE_KEY)
     if not conn:
@@ -426,8 +370,6 @@ def run_recovery():
         "details": recovery_logs
     })
 
-
-
 # --- ROUTE: Insert (Failover Logic) ---
 @app.route('/insert', methods=['POST'])
 def insert_movie():
@@ -642,6 +584,7 @@ def update_movie():
         }), 500
     
     # --- ROUTE: Delete (Failover Logic) ---
+
 @app.route('/delete', methods=['POST'])
 def delete_movie():
     try:
