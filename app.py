@@ -8,13 +8,8 @@ from dotenv import load_dotenv
 import os
 
 # Assuming log_manager and db_helpers are available and contain necessary classes/funcs
-try:
-    from log_manager import DistributedLogManager
-    from db_helpers import get_db_connection, DB_CONFIG as DB_CONFIG_IMPORT
-except ImportError:
-    DistributedLogManager = None
-    DB_CONFIG_IMPORT = None
-    print("Warning: log_manager or db_helpers not found. Using local DB_CONFIG.")
+from log_manager import DistributedLogManager
+from db_helpers import get_db_connection, DB_CONFIG # Relying on DB_CONFIG from db_helpers
 
 # Global Configuration Dictionary
 GLOBAL_SETTINGS = {
@@ -42,16 +37,12 @@ try:
     # Note: Using the provided DB_CONFIG structure for connection
     LOCAL_DB_CONN = mysql.connector.connect(**DB_CONFIG[LOCAL_NODE_KEY])
     # Pass the global log autocommit setting to the Log Manager
-    if DistributedLogManager:
-        LOG_MANAGER = DistributedLogManager(
-            LOCAL_NODE_ID, 
-            LOCAL_DB_CONN,
-            auto_commit_log=GLOBAL_SETTINGS['auto_commit_log']
-        )
-        print(f"Log Manager initialized for {LOCAL_NODE_KEY}. Recovery startup complete.")
-    else:
-        LOG_MANAGER = None
-        print(f"Log Manager module not available. Running without logging.")
+    LOG_MANAGER = DistributedLogManager(
+        LOCAL_NODE_ID, 
+        LOCAL_DB_CONN,
+        auto_commit_log=GLOBAL_SETTINGS['auto_commit_log'] # Pass the flag here
+    )
+    print(f"Log Manager initialized for {LOCAL_NODE_KEY}. Recovery startup complete.")
 except Exception as e:
     print(f"Could not initialize Log Manager or connect to {LOCAL_NODE_KEY}: {e}")
     LOG_MANAGER = None
@@ -61,7 +52,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Database configuration
-DB_CONFIG = DB_CONFIG_IMPORT if DB_CONFIG_IMPORT else {
+DB_CONFIG = {
     'node1': {
         'host': '10.2.14.84', 
         'user': 'admin',
@@ -81,30 +72,6 @@ DB_CONFIG = DB_CONFIG_IMPORT if DB_CONFIG_IMPORT else {
         'database': 'mco2_ddb'
     }
 }
-
-# --- HELPER FUNCTION: Get DB Connection (if not imported from db_helpers) ---
-if 'get_db_connection' not in dir():
-    def get_db_connection(node_key, isolation_level='READ COMMITTED', autocommit_conn=True):
-        """
-        Fallback get_db_connection function if not imported from db_helpers.
-        Creates a connection with specified isolation level.
-        """
-        try:
-            config = DB_CONFIG[node_key]
-            conn = mysql.connector.connect(**config)
-            
-            # Set isolation level
-            cursor = conn.cursor()
-            cursor.execute(f"SET SESSION TRANSACTION ISOLATION LEVEL {isolation_level}")
-            cursor.close()
-            
-            # Set autocommit mode
-            conn.autocommit = autocommit_conn
-            
-            return conn
-        except Exception as e:
-            print(f"Error connecting to {node_key}: {e}")
-            return None
 
 # --- HELPER FUNCTION: Execute Query (Modified for Flexibility) ---
 def execute_query(node_key, query, params=None, commit_immediately=None):
@@ -189,11 +156,11 @@ def perform_atomic_distributed_op(op_type, txn_id, node_ops):
             logs.append("Phase 2: All operations succeeded. Initiating COMMIT and LOGGING.")
             
             central_node_op = next(op for op in node_ops if op['is_central'])
-            record_key = central_node_op['params'][0] if op_type == 'INSERT' else central_node_op['params'][-1]
+            record_key = central_node_op['params'][-1] # Assuming titleId is the last param
             
             # 1. Log Local Commit (Point of No Return)
             if LOG_MANAGER:
-                LOG_MANAGER.log_local_commit(txn_id, op_type, record_key, json.dumps(dict(zip(['title', 'ordering'], central_node_op['params'][:2] if op_type == 'UPDATE' else central_node_op['params'][1:3]))))
+                LOG_MANAGER.log_local_commit(txn_id, op_type, record_key, json.dumps(dict(zip(['title', 'ordering'], central_node_op['params']))))
                 logs.append("Log Manager: LOCAL_COMMIT recorded.")
             
             # 2. Final Commit on all nodes
@@ -257,8 +224,8 @@ def get_row_count(node_key):
 def get_last_update(node_key):
     # TODO: Implement actual last update tracking
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
 # Frontend / Homepage
+
 @app.route('/')
 def index(): 
     return render_template('index.html')
@@ -296,11 +263,8 @@ def node_status():
 
 @app.route('/movies', methods=['GET'])
 def get_movies():
-    """
-    Modified to respect the current isolation level setting.
-    This allows READ UNCOMMITTED to see uncommitted changes.
-    """
     # Get query parameters
+    # always auto-commit read operation
     offset = int(request.args.get('offset', 0))
     limit = int(request.args.get('limit', 100))
     # Filter parameters
@@ -326,14 +290,7 @@ def get_movies():
         params.append(f"%{region}%")
 
     target_node = requested_node
-    
-    # CRITICAL: Use the current isolation level setting, but DISABLE autocommit
-    # This allows the connection to see uncommitted data when isolation level is READ UNCOMMITTED
-    conn = get_db_connection(
-        target_node, 
-        isolation_level=GLOBAL_SETTINGS['isolation_level'],
-        autocommit_conn=False  # Changed from True to False to respect isolation level
-    )
+    conn = get_db_connection(target_node, autocommit_conn=True)
     
     rows = []
     total_count = 0
@@ -352,22 +309,14 @@ def get_movies():
             else:
                 # Fallback to Central (Node 1) if a fragment returns 0 results on a specific search
                 if requested_node != 'node1':
-                    cursor.close()
                     conn.close()
-                    
-                    conn_central = get_db_connection(
-                        'node1', 
-                        isolation_level=GLOBAL_SETTINGS['isolation_level'],
-                        autocommit_conn=False
-                    )
-                    
+                    conn_central = get_db_connection('node1', autocommit_conn=True)
                     if conn_central:
                         cursor_central = conn_central.cursor(dictionary=True)
                         cursor_central.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
                         total_count = cursor_central.fetchone()['total']
                         cursor_central.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
                         rows = cursor_central.fetchall()
-                        cursor_central.close()
                         conn_central.close()
                         source = 'node1 (Fallback)'
         except Exception as e:
@@ -375,19 +324,13 @@ def get_movies():
             total_count = 0
             rows = []
         finally:
-            if conn and conn.is_connected():
-                # Close the cursor and connection after reading
-                try:
-                    cursor.close()
-                except:
-                    pass
+            if conn.is_connected():
                 conn.close()
 
     return jsonify({
         "data": rows,
         "total": total_count,
-        "source_node": source,
-        "isolation_level": GLOBAL_SETTINGS['isolation_level']  # Include isolation level in response for debugging
+        "source_node": source
     })
 
 # ROUTE: Insert
@@ -452,23 +395,11 @@ def update_movie():
     query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
     params = (new_title, new_ordering, title_id)
     
-    # Strategy for Update: Check which fragment has the record
-    # Use a read with current isolation level to find the record
-    correct_fragment = 'node3'
+    # Strategy for Update: Try Node 2, if 0 rows affected, try Node 3
     
-    # Check Node 2 first
-    check_conn = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
-    if check_conn:
-        try:
-            cursor = check_conn.cursor()
-            cursor.execute("SELECT titleId FROM movies WHERE titleId = %s", (title_id,))
-            result = cursor.fetchone()
-            cursor.close()
-            check_conn.close()
-            if result:
-                correct_fragment = 'node2'
-        except:
-            pass
+    # 1. Check Node 2 first
+    res_node2 = execute_query('node2', "SELECT titleId FROM movies WHERE titleId = %s", (title_id,), commit_immediately=True)
+    correct_fragment = 'node2' if res_node2['rows_affected'] > 0 else 'node3'
     
     node_ops = [
         {'node': 'node1', 'query': query, 'params': params, 'is_central': True},
@@ -506,22 +437,11 @@ def delete_movie():
     query = "DELETE FROM movies WHERE titleId = %s"
     params = (title_id,)
     
-    # Strategy for Delete: Check which fragment has the record
-    correct_fragment = 'node3'
+    # Strategy for Delete: Try Node 2, if 0 rows affected, try Node 3
     
-    # Check Node 2 first
-    check_conn = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
-    if check_conn:
-        try:
-            cursor = check_conn.cursor()
-            cursor.execute("SELECT titleId FROM movies WHERE titleId = %s", (title_id,))
-            result = cursor.fetchone()
-            cursor.close()
-            check_conn.close()
-            if result:
-                correct_fragment = 'node2'
-        except:
-            pass
+    # 1. Check Node 2 first
+    res_node2 = execute_query('node2', "SELECT titleId FROM movies WHERE titleId = %s", (title_id,), commit_immediately=True)
+    correct_fragment = 'node2' if res_node2['rows_affected'] > 0 else 'node3'
     
     node_ops = [
         {'node': 'node1', 'query': query, 'params': params, 'is_central': True},
@@ -663,7 +583,6 @@ def update_settings():
     if isolation_level and isolation_level in ['READ UNCOMMITTED', 'READ COMMITTED', 'REPEATABLE READ', 'SERIALIZABLE']:
         GLOBAL_SETTINGS['isolation_level'] = isolation_level
         logs.append(f"Set Global Isolation Level to: {isolation_level}")
-        logs.append("Note: New isolation level will apply to all new connections and read operations.")
 
     # --- Update Transaction Autocommit Setting ---
     auto_commit_str = data.get('autoCommit')
