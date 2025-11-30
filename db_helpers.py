@@ -27,7 +27,10 @@ def get_db_connection(node_key, isolation_level = None, autocommit_conn = True):
         conn = mysql.connector.connect(**config)
 
         if isolation_level:
-            conn.isolation_level = isolation_level
+            cursor = conn.cursor()
+            # This ensures the database engine enforces the lock immediately
+            cursor.execute(f"SET SESSION TRANSACTION ISOLATION LEVEL {isolation_level}")
+            cursor.close()
             
         conn.autocommit = autocommit_conn
 
