@@ -6,6 +6,8 @@ let currentFilters = {
     title: '',
     region: ''
 };
+// --- NEW GLOBAL VARIABLE ---
+let currentEditingRegion = ''; 
 
 async function loadNodeData(nodeNumber) {
     currentOffset = 0; // Reset offset when loading new node
@@ -70,8 +72,12 @@ async function fetchMovies() {
         }
         
         // Populate table with data
+        // Populate table with data
         result.data.forEach(movie => {
             const row = document.createElement('tr');
+            // FIX: Ensure quotes don't break HTML if data contains quotes
+            const safeMovie = JSON.stringify(movie).replace(/"/g, '&quot;');
+            
             row.innerHTML = `
                 <td title="${movie.titleId || 'N/A'}">${movie.titleId || 'N/A'}</td>
                 <td>${movie.ordering || 'N/A'}</td>
@@ -82,8 +88,9 @@ async function fetchMovies() {
                 <td title="${movie.attributes || 'N/A'}">${movie.attributes || 'N/A'}</td>
                 <td>${movie.isOriginalTitle == 1 ? 'Yes' : 'No'}</td>
                 <td>
-                    <button onclick='editRow(${JSON.stringify(movie)})'>Edit</button>
-                    <button class="delete-button" onclick="deleteRow('${movie.titleId}')">Delete</button>
+                    <button onclick='editRow(${safeMovie})'>Edit</button>
+                    <!-- OPTIONAL: Pass region to deleteRow too if you want to optimize delete -->
+                    <button class="delete-button" onclick="deleteRow('${movie.titleId}', '${movie.region || ''}')">Delete</button>
                 </td>
             `;
             tableBody.appendChild(row);
@@ -213,6 +220,7 @@ async function submitInsert() {
 
 function editRow(movie) {
     // Populate edit modal with current data (only editable fields)
+    currentEditingRegion = movie.region; 
     document.getElementById('edit-titleid').value = movie.titleId;
     document.getElementById('display-titleid').value = movie.titleId;
     document.getElementById('edit-ordering').value = movie.ordering;
@@ -224,6 +232,7 @@ function editRow(movie) {
 
 function closeEditModal() {
     document.getElementById('edit-modal').classList.remove('active');
+    currentEditingRegion = '';
 }
 
 async function submitUpdate() {
@@ -231,8 +240,9 @@ async function submitUpdate() {
     const titleId = document.getElementById('edit-titleid').value;
     const ordering = document.getElementById('edit-ordering').value;
     const title = document.getElementById('edit-title').value;
-
+    const region = currentEditingRegion;     
     // Validate
+
     if (!ordering || !title) {
         alert('Please fill in all required fields');
         return;
@@ -241,7 +251,8 @@ async function submitUpdate() {
     const payload = {
         titleId: titleId,
         ordering: parseInt(ordering),
-        title: title
+        title: title,
+        region: region
     };
 
     console.log('Updating:', payload);
