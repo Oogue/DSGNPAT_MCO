@@ -6,6 +6,8 @@ let currentFilters = {
     title: '',
     region: ''
 };
+// --- NEW GLOBAL VARIABLE ---
+let currentEditingRegion = ''; 
 
 async function loadNodeData(nodeNumber) {
     currentOffset = 0; // Reset offset when loading new node
@@ -213,6 +215,7 @@ async function submitInsert() {
 
 function editRow(movie) {
     // Populate edit modal with current data (only editable fields)
+    currentEditingRegion = movie.region; 
     document.getElementById('edit-titleid').value = movie.titleId;
     document.getElementById('display-titleid').value = movie.titleId;
     document.getElementById('edit-ordering').value = movie.ordering;
@@ -224,6 +227,7 @@ function editRow(movie) {
 
 function closeEditModal() {
     document.getElementById('edit-modal').classList.remove('active');
+    currentEditingRegion = '';
 }
 
 async function submitUpdate() {
@@ -231,8 +235,9 @@ async function submitUpdate() {
     const titleId = document.getElementById('edit-titleid').value;
     const ordering = document.getElementById('edit-ordering').value;
     const title = document.getElementById('edit-title').value;
-    const region = movie.region;
+    const region = currentEditingRegion;     
     // Validate
+
     if (!ordering || !title) {
         alert('Please fill in all required fields');
         return;
@@ -242,7 +247,7 @@ async function submitUpdate() {
         titleId: titleId,
         ordering: parseInt(ordering),
         title: title,
-        region: movie.region
+        region: region
     };
 
     console.log('Updating:', payload);
