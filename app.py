@@ -207,7 +207,7 @@ def perform_atomic_distributed_op(op_type, txn_id, node_ops):
 def get_row_count(node_key):
     """Get the total number of rows in a node"""
     # Force autocommit for simple read
-    conn = get_db_connection(node_key, autocommit_conn=True) 
+    conn = get_db_connection(node_key, GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True) 
     if not conn:
         return 0
     try:
@@ -236,7 +236,7 @@ def node_status():
     status_report = {}
     for key in DB_CONFIG:
         # Force autocommit = true for connection status check
-        conn = get_db_connection(key, autocommit_conn=True)
+        conn = get_db_connection(key, GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
         if conn:
             row_count = get_row_count(key)
             last_update = get_last_update(key)
@@ -290,7 +290,7 @@ def get_movies():
         params.append(f"%{region}%")
 
     target_node = requested_node
-    conn = get_db_connection(target_node, autocommit_conn=True)
+    conn = get_db_connection(target_node, GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
     
     rows = []
     total_count = 0
@@ -310,7 +310,7 @@ def get_movies():
                 # Fallback to Central (Node 1) if a fragment returns 0 results on a specific search
                 if requested_node != 'node1':
                     conn.close()
-                    conn_central = get_db_connection('node1', autocommit_conn=True)
+                    conn_central = get_db_connection('node1', GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
                     if conn_central:
                         cursor_central = conn_central.cursor(dictionary=True)
                         cursor_central.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
