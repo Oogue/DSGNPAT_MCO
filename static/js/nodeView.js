@@ -103,6 +103,21 @@ async function fetchMovies() {
     }
 }
 
+async function toggleCrashMode() {
+    try {
+        const response = await fetch('/toggle-crash-mode', { method: 'POST' });
+        const result = await response.json();
+        
+        if (result.status === 'ENABLED') {
+            alert("⚠️ CRASH SIMULATION ENABLED ⚠️\nThe next INSERT operation will pause for 10 seconds.\nKill the server during this pause to simulate a crash!");
+        } else {
+            alert("Crash simulation DISABLED.");
+        }
+    } catch (error) {
+        console.error("Error toggling crash mode:", error);
+    }
+}
+
 function updateRowCount() {
     const currentRows = Math.min(currentOffset + currentLimit, totalRows);
     document.getElementById('current-rows').textContent = currentRows;
