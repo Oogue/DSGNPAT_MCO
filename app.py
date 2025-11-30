@@ -14,6 +14,9 @@ import time
 import threading
 import traceback
 
+
+SIMULATE_CRASH_MODE = False
+
 load_dotenv()
 try:
     LOCAL_NODE_KEY = os.environ.get('LOCAL_NODE_KEY', 'node1') 
@@ -35,6 +38,7 @@ except Exception as e:
 # Initialize the Flask application
 app = Flask(__name__)
 CORS(app)
+
 
 
 # --- HELPER FUNCTION: Connect to DB ---
@@ -413,7 +417,12 @@ def insert_movie():
         # Log the transaction record immediately (Local Log)
         new_value = data
         LOG_MANAGER.log_local_commit(txn_id, 'INSERT', title_id, new_value)
-        
+        # --- CRASH SIMULATION POINT ---
+        if SIMULATE_CRASH_MODE:
+            print("\n!!! CRASH MODE ACTIVE !!!")
+            print("!!! YOU HAVE 10 SECONDS TO KILL THE SERVER TO SIMULATE A CRASH AFTER LOCAL COMMIT !!!")
+            time.sleep(10)
+            
         primary_success = False
         if res_primary['success']:
             primary_success = True
@@ -525,7 +534,12 @@ def update_movie():
             'region': region # Stored for recovery routing
         }
         LOG_MANAGER.log_local_commit(txn_id, 'UPDATE', title_id, new_value)
-        
+        # --- CRASH SIMULATION POINT ---
+        if SIMULATE_CRASH_MODE:
+            print("\n!!! CRASH MODE ACTIVE !!!")
+            print("!!! YOU HAVE 10 SECONDS TO KILL THE SERVER TO SIMULATE A CRASH AFTER LOCAL COMMIT !!!")
+            time.sleep(10)
+            
         primary_success = False
         if res_primary['success']:
             primary_success = True
@@ -625,7 +639,12 @@ def delete_movie():
             'region': region 
         }
         LOG_MANAGER.log_local_commit(txn_id, 'DELETE', title_id, new_value)
-        
+        # --- CRASH SIMULATION POINT ---
+        if SIMULATE_CRASH_MODE:
+            print("\n!!! CRASH MODE ACTIVE !!!")
+            print("!!! YOU HAVE 10 SECONDS TO KILL THE SERVER TO SIMULATE A CRASH AFTER LOCAL COMMIT !!!")
+            time.sleep(10)
+            
         primary_success = False
         if res_primary['success']:
             primary_success = True
@@ -797,6 +816,15 @@ def report_types():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+# --- ROUTE: Toggle Crash Simulation (NEW) ---
+@app.route('/toggle-crash-mode', methods=['POST'])
+def toggle_crash_mode():
+    global SIMULATE_CRASH_MODE
+    SIMULATE_CRASH_MODE = not SIMULATE_CRASH_MODE
+    status = "ENABLED" if SIMULATE_CRASH_MODE else "DISABLED"
+    print(f"!!! CRASH SIMULATION MODE {status} !!!")
+    return jsonify({"status": status, "mode": SIMULATE_CRASH_MODE})
 
 if __name__ == '__main__':
     start_background_recovery()
