@@ -409,7 +409,8 @@ def run_recovery():
     })
 
 
-# --- ROUTE: Insert (Local Commit First Strategy) ---
+
+# --- ROUTE: Insert (Target Fragment First Strategy) ---
 @app.route('/insert', methods=['POST'])
 def insert_movie():
     if not LOG_MANAGER:
@@ -437,89 +438,66 @@ def insert_movie():
     """
 
     # 2. Determine Logic based on Location (Fragmentation Rules)
-    # Rules:
-    # - US/JP -> Stored in Node 2
-    # - Others -> Stored in Node 3
-    # - Node 1 -> Stores EVERYTHING (Central)
+    # Rules: US/JP -> Node 2, Others -> Node 3
+    primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
     
-    target_fragment = 'node2' if region in ['US', 'JP'] else 'node3'
-    
-    # Identify "Local" vs "Remote"
-    # The 'primary_target' is where the data MUST exist.
-    # If we are Node 1, we save locally, then replicate to fragment.
-    # If we are Fragment, we save locally, then replicate to Node 1.
-    
-    replication_target_node = None
-    
-    if LOCAL_NODE_KEY == 'node1':
-        # We are Central. 
-        # Local Write: YES.
-        # Remote Write: To the specific fragment.
-        replication_target_node = target_fragment
-    else:
-        # We are a Fragment (Node 2 or 3).
-        # Check if this data actually belongs to us.
-        if LOCAL_NODE_KEY == target_fragment:
-            # It belongs here.
-            # Local Write: YES.
-            # Remote Write: To Central (Node 1).
-            replication_target_node = 'node1'
-        else:
-            # Edge Case: User sent a "US" movie to Node 3.
-            # In a strict system, we might reject or forward. 
-            # For this test, we will try to write to Node 3 (as misplaced data) 
-            # OR we can reject. Let's assume we proceed but replicate to Central.
-            replication_target_node = 'node1'
+    # Replication Target is ALWAYS Central (Node 1)
+    # Exception: If Node 1 is somehow the primary (not in current rules), we don't replicate to it again.
+    replication_target_node = 'node1' if primary_target_node != 'node1' else None
 
     logs = []
     
-    # --- PHASE 1: LOCAL COMMIT ---
-    logs.append(f"Step 1: Attempting LOCAL COMMIT to {LOCAL_NODE_KEY}...")
+    # --- PHASE 1: PRIMARY COMMIT (Target Fragment) ---
+    logs.append(f"Step 1: Attempting PRIMARY COMMIT to {primary_target_node}...")
     
-    local_res = execute_query(LOCAL_NODE_KEY, query, params)
+    # We assume 'execute_query' handles the connection to the correct node (Local or Remote)
+    res_primary = execute_query(primary_target_node, query, params)
     
-    if not local_res['success']:
-        # If local commit fails, the whole thing fails. Client receives error.
+    if not res_primary['success']:
+        # If primary commit fails, we abort.
         return jsonify({
             "status": "FAILURE", 
-            "stage": "LOCAL_COMMIT", 
-            "error": local_res['error'],
+            "stage": "PRIMARY_COMMIT", 
+            "error": res_primary['error'],
             "logs": logs
         }), 500
     
-    # Log the successful local commit to DB
-    # We store the 'new_value' in JSON for recovery purposes later
+    # Log the commit. 
+    # We log this in the CURRENT node's log manager to track the transaction lifecycle,
+    # even if we just performed a remote write.
     new_value = data
     LOG_MANAGER.log_local_commit(txn_id, 'INSERT', title_id, new_value)
-    logs.append("Step 1 Success: Local DB write & Log Entry created.")
+    logs.append(f"Step 1 Success: Primary DB write to {primary_target_node} & Log Entry created.")
 
-    # --- PHASE 2: REPLICATION (Best Effort) ---
-    logs.append(f"Step 2: Attempting REPLICATION to {replication_target_node}...")
+    # --- PHASE 2: REPLICATION (To Central) ---
+    final_status = "FULLY_COMMITTED"
     
-    # Update log status to PENDING
-    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
-    
-    # Attempt Remote Write
-    remote_res = execute_query(replication_target_node, query, params)
-    
-    if remote_res['success']:
-        # Update Log to SUCCESS
-        LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
-        logs.append(f"Step 2 Success: Replicated to {replication_target_node}.")
-        final_status = "FULLY_COMMITTED"
-    else:
-        # Update Log to FAILED
-        LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
-        logs.append(f"Step 2 Failed: Could not write to {replication_target_node}. Error: {remote_res.get('error')}")
-        logs.append("Action: Marked as REPLICATION_FAILED in logs. Background recovery will handle it.")
-        final_status = "LOCAL_ONLY_REPLICATION_PENDING"
+    if replication_target_node:
+        logs.append(f"Step 2: Attempting REPLICATION to {replication_target_node}...")
+        
+        # Update log status to PENDING
+        LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+        
+        # Attempt Replication Write
+        res_replica = execute_query(replication_target_node, query, params)
+        
+        if res_replica['success']:
+            # Update Log to SUCCESS
+            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+            logs.append(f"Step 2 Success: Replicated to {replication_target_node}.")
+        else:
+            # Update Log to FAILED
+            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+            logs.append(f"Step 2 Failed: Could not write to {replication_target_node}. Error: {res_replica.get('error')}")
+            logs.append("Action: Marked as REPLICATION_FAILED. Background recovery will retry.")
+            final_status = "PRIMARY_ONLY_REPLICATION_PENDING"
 
     return jsonify({
         "status": final_status,
         "txn_id": txn_id,
         "logs": logs,
-        "local_rows": local_res['rows_affected'],
-        "replication_error": remote_res.get('error') if not remote_res['success'] else None
+        "primary_node": primary_target_node,
+        "replication_node": replication_target_node
     })
 
 
