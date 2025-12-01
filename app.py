@@ -318,15 +318,28 @@ def update_movie():
         data = request.json
         txn_id = str(uuid.uuid4())
         title_id = data.get('titleId')
-        region = data.get('region') # Assumed passed from frontend
+        region = data.get('region') 
         
-        # Determine Primary based on Region (if known) or fallback
-        if not region: 
-            # Simple routing guess if region missing
-            res_n2 = execute_query('node2', "SELECT region FROM movies WHERE titleId=%s", (title_id,), commit_immediately=True)
-            primary_target_node = 'node2' if res_n2['rows_affected'] > 0 else 'node3'
-        else:
-            primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+        if not region:
+            print(f"Region missing for {title_id}. Querying Central Node...")
+            # Connect to Node 1 to find the Truth
+            conn_central = get_db_connection('node1', autocommit_conn=True)
+            if conn_central:
+                try:
+                    cur = conn_central.cursor(dictionary=True)
+                    cur.execute("SELECT region FROM movies WHERE titleId = %s", (title_id,))
+                    row = cur.fetchone()
+                    if row:
+                        region = row['region']
+                        print(f"Resolved region to: {region}")
+                    else:
+                        return jsonify({"error": "TitleID not found in Central Database."}), 404
+                finally:
+                    conn_central.close()
+            else:
+                return jsonify({"error": "Central Node Unavailable. Cannot determine region for routing."}), 500
+
+        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
 
         params = (data.get('title'), data.get('ordering'), title_id)
         query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
@@ -341,13 +354,11 @@ def update_movie():
                     'connections': { primary_target_node: res['conn_obj'] }
                 }
                 return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused UPDATE on {primary_target_node}. Row locked."]})
-            return jsonify({"status": "FAILED"})
+            return jsonify({"status": "FAILED", "error": res.get('error')})
 
         # === RECOVERY V3 MODE ===
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         res_primary = execute_query(primary_target_node, query, params)
-        
-        # Log Logic (Simplified)
         LOG_MANAGER.log_local_commit(txn_id, 'UPDATE', title_id, data)
         if SIMULATE_CRASH_MODE: time.sleep(10)
         
@@ -356,7 +367,7 @@ def update_movie():
             LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
 
         if replication_target_node:
-            execute_query(replication_target_node, query, params) # Simple execute for replica
+            execute_query(replication_target_node, query, params) 
 
         return jsonify({"status": "COMPLETED", "txn_id": txn_id})
 
@@ -365,8 +376,7 @@ def update_movie():
         return jsonify({
             "status": "CRASH",
             "error": "Internal Server Error trapped",
-            "details": str(e),
-            "logs": ["CRITICAL ERROR: " + str(e)]
+            "details": str(e)
         }), 500
 
 # --- DELETE (Combined Logic) ---
@@ -376,7 +386,23 @@ def delete_movie():
         data = request.json
         txn_id = str(uuid.uuid4())
         title_id = data.get('titleId')
-        region = data.get('region') # Needed for routing
+        region = data.get('region') 
+        
+        if not region:
+            conn_central = get_db_connection('node1', autocommit_conn=True)
+            if conn_central:
+                try:
+                    cur = conn_central.cursor(dictionary=True)
+                    cur.execute("SELECT region FROM movies WHERE titleId = %s", (title_id,))
+                    row = cur.fetchone()
+                    if row:
+                        region = row['region']
+                    else:
+                        return jsonify({"error": "TitleID not found."}), 404
+                finally:
+                    conn_central.close()
+            else:
+                 return jsonify({"error": "Central Node Unavailable."}), 500
         
         primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
         query = "DELETE FROM movies WHERE titleId = %s"
@@ -392,7 +418,7 @@ def delete_movie():
                     'connections': { primary_target_node: res['conn_obj'] }
                 }
                 return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused DELETE on {primary_target_node}. Row locked."]})
-            return jsonify({"status": "FAILED"})
+            return jsonify({"status": "FAILED", "error": res.get('error')})
 
         # === RECOVERY V3 MODE ===
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
