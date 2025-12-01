@@ -30,7 +30,7 @@ def get_db_connection(node_key, isolation_level=None, autocommit_conn=True):
         if isolation_level:
             cursor = conn.cursor()
             # Ensure proper syntax (spaces instead of dashes)
-            level_sql = isolation_level.replace('-', ' ').replace('_', ' ').upper() 
+            level_sql = isolation_level.replace('_', ' ').upper() 
             cursor.execute(f"SET SESSION TRANSACTION ISOLATION LEVEL {level_sql}")
             cursor.close()
             
