@@ -219,7 +219,7 @@ def get_movies():
     
     target_node = requested_node
     # Connect with specific isolation level
-    conn = get_db_connection(target_node, isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
+    conn = get_db_connection(target_node, isolation_level=None, autocommit_conn=True)
     
     rows = []
     total_count = 0
@@ -228,6 +228,8 @@ def get_movies():
     if conn:
         cursor = conn.cursor(dictionary=True)
         try:
+            current_iso = GLOBAL_SETTINGS['isolation_level'].replace('-', ' ').replace('_', ' ').upper()
+            cursor.execute(f"SET SESSION TRANSACTION ISOLATION LEVEL {current_iso}")
             cursor.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
             total_count = cursor.fetchone()['total']
             
