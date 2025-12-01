@@ -14,6 +14,7 @@ import time
 import threading
 import traceback
 
+
 from log_manager import DistributedLogManager
 from db_helpers import get_db_connection, DB_CONFIG    
 
@@ -209,7 +210,8 @@ def get_movies():
     title_id = request.args.get('titleId', '')
     title = request.args.get('title', '')
     region = request.args.get('region', '')
-    requested_node = request.args.get('node', 'node1')
+    
+    requested_node = request.args.get(LOCAL_NODE_KEY, 'node1')
     if requested_node not in DB_CONFIG: requested_node = 'node1'
 
     where_clause = " WHERE 1=1" 
