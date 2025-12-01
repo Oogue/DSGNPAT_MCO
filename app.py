@@ -378,9 +378,23 @@ def delete_movie():
         title_id = data.get('titleId')
         region = data.get('region') # Needed for routing
         
+        if not region:
+            # Query Node 1 (Central) to find where this movie actually lives
+            # We use dirty read (isolation level) or just a quick lookup
+            check_res = execute_query('node1', "SELECT region FROM movies WHERE titleId = %s", (title_id,))
+            
+            # You'll need to adjust execute_query in the new version to return data, 
+            # or use a helper like get_db_connection directly here.
+            # Assuming you can get the row:
+            conn = get_db_connection('node1')
+            cur = conn.cursor()
+            cur.execute("SELECT region FROM movies WHERE titleId = %s", (title_id,))
+            row = cur.fetchone()
+            if row:
+                region = row[0]
+            conn.close()
+
         primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-        query = "DELETE FROM movies WHERE titleId = %s"
-        params = (title_id,)
 
         # === CONCURRENCY SIMULATION MODE ===
         if not GLOBAL_SETTINGS['auto_commit']:
