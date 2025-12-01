@@ -223,7 +223,7 @@ def get_movies():
         where_clause += " AND region LIKE %s"
         params.append(f"%{region}%")
 
-    allow_fallback = GLOBAL_SETTINGS['auto_commit'] 
+    allow_fallback = True
     target_node = requested_node
     reader_autocommit = not GLOBAL_SETTINGS.get('simulate_blocking', False)
     conn = get_db_connection(
