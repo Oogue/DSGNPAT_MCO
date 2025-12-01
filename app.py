@@ -382,7 +382,7 @@ def delete_movie():
         primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
         query = "DELETE FROM movies WHERE titleId = %s"
         params = (title_id,)
-
+        print(primary_target_node)
         # === CONCURRENCY SIMULATION MODE ===
         if not GLOBAL_SETTINGS['auto_commit']:
             res = execute_query(primary_target_node, query, params, commit_immediately=False)
