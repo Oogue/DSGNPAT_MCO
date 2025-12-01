@@ -11,10 +11,10 @@ function navigateToNode(nodeNumber) {
     }
     
     currentNode = nodeNumber;
-    //document.getElementById('dashboard-view').style.display = 'none';
+    document.getElementById('dashboard-view').style.display = 'none';
     document.getElementById('node-view').classList.add('active');
-    //document.getElementById('current-node-title').textContent = 
-    //    nodeNumber === 1 ? 'Node 1 (Central)' : `Node ${nodeNumber} (Regional)`;
+    document.getElementById('current-node-title').textContent = 
+        nodeNumber === 1 ? 'Node 1 (Central)' : `Node ${nodeNumber} (Regional)`;
     
     loadNodeData(nodeNumber);
 }

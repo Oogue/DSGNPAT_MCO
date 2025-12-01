@@ -27,7 +27,8 @@ async function loadNodeData(nodeNumber) {
 async function fetchMovies() {
     try {
         // Build query parameters
-        const activeNode = currentNode || 1;
+        const domNode = document.getElementById('node-view').getAttribute('data-active-node');
+        const activeNode = domNode || currentNode || 1;
 
         const params = new URLSearchParams({
             offset: currentOffset,

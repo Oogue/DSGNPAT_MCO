@@ -203,6 +203,7 @@ def get_movies():
     title_id = request.args.get('titleId', '')
     title = request.args.get('title', '')
     region = request.args.get('region', '')
+    has_filters = bool(title_id or title or region)
     requested_node = request.args.get('node', 'node1')
     if requested_node not in DB_CONFIG: requested_node = 'node1'
 
@@ -231,10 +232,10 @@ def get_movies():
             cursor.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
             total_count = cursor.fetchone()['total']
             
-            if total_count > 0 or (not title_id and not title and not region):
+            if total_count > 0 or not has_filters:
                 cursor.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
                 rows = cursor.fetchall()
-            elif allow_fallback and requested_node != 'node1':
+            elif allow_fallback and requested_node != 'node1' and has_filters:
                 # Fallback Logic (Only if not simulating concurrency)
                 conn.close()
                 conn = get_db_connection('node1', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
