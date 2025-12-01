@@ -27,36 +27,30 @@ function navigateToDashboard() {
 async function applySettings() {
     const isolationLevel = document.getElementById('isolation-level').value;
     const autoCommitToggle = document.getElementById('autocommit-toggle').checked;
+    const blockingToggle = document.getElementById('blocking-toggle').checked;
     
-    console.log('Applying settings:', { isolationLevel, autoCommit: autoCommitToggle });
+    console.log('Applying settings:', { isolationLevel, autoCommit: autoCommitToggle, simulateBlocking: blockingToggle });
     
     try {
-        // Send settings to the backend
         const response = await fetch('/settings', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 isolationLevel: isolationLevel,
-                autoCommit: autoCommitToggle
+                autoCommit: autoCommitToggle,
+                simulateBlocking: blockingToggle
             })
         });
         
         const result = await response.json();
-        console.log('Settings updated on server:', result);
-
-        const modeText = autoCommitToggle ? "Auto Commit (Atomic)" : "Manual 2PC (Pause)";
-        alert(`Settings applied successfully!\nIsolation Level: ${isolationLevel}\nTransaction Mode: ${modeText}`);
+        const readMode = blockingToggle ? "Locking (May Freeze)" : "Fast (Non-Blocking)";
+        alert(`Settings Applied!\nIsolation: ${isolationLevel}\nWrite Mode: ${autoCommitToggle ? "Auto" : "Manual"}\nRead Mode: ${readMode}`);
         
     } catch (error) {
         console.error("Error sending settings:", error);
-        alert("Failed to apply settings on the server. Check console.");
+        alert("Failed to apply settings.");
     }
     
-    const modeText = autoCommitToggle ? "Auto Commit (Atomic)" : "Manual 2PC (Pause)";
-    alert(`Settings applied:\nIsolation Level: ${isolationLevel}\nTransaction Mode: ${modeText}`);
-
     updateCommitButtonState();
 }
 

@@ -21,7 +21,8 @@ from db_helpers import get_db_connection, DB_CONFIG
 GLOBAL_SETTINGS = {
     'isolation_level': 'READ COMMITTED', # Default
     'auto_commit': True,                 # True = Recovery Logic; False = Concurrency Simulation
-    'auto_commit_log': True
+    'auto_commit_log': True,
+    'simulate_blocking': False
 }
 
 # Stores active connection objects for Manual Mode
@@ -204,22 +205,32 @@ def get_movies():
     title = request.args.get('title', '')
     region = request.args.get('region', '')
     requested_node = request.args.get('node', 'node1')
-    if requested_node not in DB_CONFIG: requested_node = 'node1'
+    
+    # Validate node
+    if requested_node not in DB_CONFIG: 
+        requested_node = 'node1'
 
+    # Build SQL Filter
     where_clause = " WHERE 1=1" 
     params = []
-    if title_id: where_clause += " AND titleId LIKE %s"; params.append(f"%{title_id}%")
-    if title: where_clause += " AND title LIKE %s"; params.append(f"%{title}%")
-    if region: where_clause += " AND region LIKE %s"; params.append(f"%{region}%")
+    if title_id: 
+        where_clause += " AND titleId LIKE %s"
+        params.append(f"%{title_id}%")
+    if title: 
+        where_clause += " AND title LIKE %s"
+        params.append(f"%{title}%")
+    if region: 
+        where_clause += " AND region LIKE %s"
+        params.append(f"%{region}%")
 
-    # IMPORTANT: Reader uses the Global Isolation Level
-    # If AutoCommit is OFF (Simulation Mode), we DO NOT fallback to Central,
-    # because we want to see the lock/dirty-read on the specific node being tested.
     allow_fallback = GLOBAL_SETTINGS['auto_commit'] 
-    
     target_node = requested_node
-    # Connect with specific isolation level
-    conn = get_db_connection(target_node, isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
+    reader_autocommit = not GLOBAL_SETTINGS.get('simulate_blocking', False)
+    conn = get_db_connection(
+        target_node, 
+        isolation_level=GLOBAL_SETTINGS['isolation_level'], 
+        autocommit_conn=reader_autocommit
+    )
     
     rows = []
     total_count = 0
@@ -234,8 +245,11 @@ def get_movies():
             if total_count > 0 or (not title_id and not title and not region):
                 cursor.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
                 rows = cursor.fetchall()
+
+                if not reader_autocommit:
+                    conn.commit()
+
             elif allow_fallback and requested_node != 'node1':
-                # Fallback Logic (Only if not simulating concurrency)
                 conn.close()
                 conn = get_db_connection('node1', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
                 if conn:
@@ -245,10 +259,15 @@ def get_movies():
                     cursor.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
                     rows = cursor.fetchall()
                     source = 'node1 (Fallback)'
+        
         except Exception as e:
             print(f"Read Error: {e}")
+            if not reader_autocommit:
+                try: conn.rollback()
+                except: pass
         finally:
-            if conn and conn.is_connected(): conn.close()
+            if conn and conn.is_connected(): 
+                conn.close()
 
     return jsonify({"data": rows, "total": total_count, "source_node": source})
 
@@ -512,6 +531,10 @@ def update_settings():
         val = data['autoCommit']
         if isinstance(val, str): val = val.lower() == 'true'
         GLOBAL_SETTINGS['auto_commit'] = val
+    if 'simulateBlocking' in data:
+        val = data['simulateBlocking']
+        if isinstance(val, str): val = val.lower() == 'true'
+        GLOBAL_SETTINGS['simulate_blocking'] = val
     
     return jsonify({"status": "Updated", "settings": GLOBAL_SETTINGS})
 
