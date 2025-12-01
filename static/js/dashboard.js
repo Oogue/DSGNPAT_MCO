@@ -24,16 +24,35 @@ function navigateToDashboard() {
     alert("Dashboard view is not available. Each server shows only its own node.");
 }
 
-function applySettings() {
+async function applySettings() {
     const isolationLevel = document.getElementById('isolation-level').value;
     const autoCommitToggle = document.getElementById('autocommit-toggle').checked;
     
     console.log('Applying settings:', { isolationLevel, autoCommit: autoCommitToggle });
     
-    // TODO: Send settings to backend
-    // - Apply isolation level to transactions
-    // - Configure failure simulation scenarios
-    // - Update backend transaction handling
+    try {
+        // Send settings to the backend
+        const response = await fetch('/settings', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                isolationLevel: isolationLevel,
+                autoCommit: autoCommitToggle
+            })
+        });
+        
+        const result = await response.json();
+        console.log('Settings updated on server:', result);
+
+        const modeText = autoCommitToggle ? "Auto Commit (Atomic)" : "Manual 2PC (Pause)";
+        alert(`Settings applied successfully!\nIsolation Level: ${isolationLevel}\nTransaction Mode: ${modeText}`);
+        
+    } catch (error) {
+        console.error("Error sending settings:", error);
+        alert("Failed to apply settings on the server. Check console.");
+    }
     
     const modeText = autoCommitToggle ? "Auto Commit (Atomic)" : "Manual 2PC (Pause)";
     alert(`Settings applied:\nIsolation Level: ${isolationLevel}\nTransaction Mode: ${modeText}`);
