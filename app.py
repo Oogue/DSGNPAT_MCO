@@ -266,6 +266,7 @@ def insert_movie():
 
         # === CONCURRENCY SIMULATION MODE (Auto Commit OFF) ===
         if not GLOBAL_SETTINGS['auto_commit']:
+            repl_target = 'node1' if primary_target_node != 'node1' else None
             # Execute on Primary ONLY (to create the lock) and HOLD.
             print(f"Manual Mode: Locking {primary_target_node}")
             res = execute_query(primary_target_node, query, params, commit_immediately=False)
@@ -274,7 +275,12 @@ def insert_movie():
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'INSERT', 
                     'status': 'PENDING_MANUAL',
-                    'connections': { primary_target_node: res['conn_obj'] }
+                    'connections': { primary_target_node: res['conn_obj'] },
+                    'replication': {
+                        'target': repl_target,
+                        'query': query,
+                        'params': params
+                    }
                 }
                 return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused INSERT on {primary_target_node}. Row locked."]})
             else:
@@ -348,10 +354,16 @@ def update_movie():
         if not GLOBAL_SETTINGS['auto_commit']:
             res = execute_query(primary_target_node, query, params, commit_immediately=False)
             if res['success']:
+                repl_target = 'node1' if primary_target_node != 'node1' else None
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'UPDATE', 
                     'status': 'PENDING_MANUAL',
-                    'connections': { primary_target_node: res['conn_obj'] }
+                    'connections': { primary_target_node: res['conn_obj'] },
+                    'replication': {
+                        'target': repl_target,
+                        'query': query,
+                        'params': params
+                    }
                 }
                 return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused UPDATE on {primary_target_node}. Row locked."]})
             return jsonify({"status": "FAILED", "error": res.get('error')})
@@ -412,10 +424,16 @@ def delete_movie():
         if not GLOBAL_SETTINGS['auto_commit']:
             res = execute_query(primary_target_node, query, params, commit_immediately=False)
             if res['success']:
+                repl_target = 'node1' if primary_target_node != 'node1' else None
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'DELETE', 
                     'status': 'PENDING_MANUAL',
-                    'connections': { primary_target_node: res['conn_obj'] }
+                    'connections': { primary_target_node: res['conn_obj'] },
+                    'replication': {
+                        'target': repl_target,
+                        'query': query,
+                        'params': params
+                    }
                 }
                 return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused DELETE on {primary_target_node}. Row locked."]})
             return jsonify({"status": "FAILED", "error": res.get('error')})
@@ -490,6 +508,20 @@ def resolve_transaction():
             conn.close()
         except Exception as e:
             logs.append(f"{node} Error: {e}")
+    
+    if action == 'COMMIT' and 'replication' in txn_info:
+        repl = txn_info['replication']
+        target = repl.get('target')
+        
+        if target:
+            try:
+                res = execute_query(target, repl['query'], repl['params'], commit_immediately=True)
+                if res['success']:
+                    logs.append(f"Replication to {target}: Success.")
+                else:
+                    logs.append(f"Replication to {target}: Failed ({res.get('error')}).")
+            except Exception as e:
+                logs.append(f"Replication Error: {str(e)}")
             
     del ACTIVE_TXN_CONNECTIONS[txn_id]
     return jsonify({"message": "Resolved", "logs": logs})
