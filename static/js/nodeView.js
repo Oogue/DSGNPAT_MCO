@@ -220,7 +220,13 @@ async function submitInsert() {
         const result = await response.json();
 
         // Show Feedback
-        alert(`Transaction Status:\n${result.logs.join('\n')}`);
+        if (result.logs && Array.isArray(result.logs)) {
+            alert(`Insert Status:\n${result.logs.join('\n')}`);
+        } else if (result.error) {
+            alert(`Insert Failed:\n${result.error}\nDetails: ${result.details || ''}`);
+        } else {
+            alert(`Insert Status:\n${JSON.stringify(result)}`);
+        }
         
         // Refresh Data
         closeInsertModal();
@@ -316,7 +322,13 @@ async function deleteRow(titleId) {
         const result = await response.json();
         
         // Show Feedback
-        alert(`Delete Status:\n${result.logs.join('\n')}`);
+        if (result.logs && Array.isArray(result.logs)) {
+            alert(`Delete Status:\n${result.logs.join('\n')}`);
+        } else if (result.error) {
+            alert(`Delete Failed:\n${result.error}\nDetails: ${result.details || ''}`);
+        } else {
+            alert(`Delete Status:\n${JSON.stringify(result)}`);
+        }
         
         // Refresh Data
         currentOffset = 0;
