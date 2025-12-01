@@ -207,7 +207,11 @@ def start_background_recovery():
 # Frontend / Homepage
 @app.route('/')
 def index(): 
-    return render_template('index.html')
+    return render_template(
+                           'index.html',
+                           current_node=LOCAL_NODE_KEY, 
+                           current_node_id=LOCAL_NODE_ID
+                          )
 
 # ROUTE: Status with detailed information
 @app.route('/status', methods=['GET'])
