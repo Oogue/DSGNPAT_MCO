@@ -369,7 +369,7 @@ def update_movie():
             "logs": ["CRITICAL ERROR: " + str(e)]
         }), 500
 
-# --- DELETE (Fixed Replication Logic) ---
+# --- DELETE (Combined Logic) ---
 @app.route('/delete', methods=['POST'])
 def delete_movie():
     try:
@@ -378,19 +378,7 @@ def delete_movie():
         title_id = data.get('titleId')
         region = data.get('region') # Needed for routing
         
-        # --- FIX STARTS HERE ---
-        # If region is missing, we must find where the data lives.
-        if not region:
-            # Check if the row exists in Node 2 (US/JP)
-            # We use commit_immediately=True to just peek at the data without locking
-            res_n2 = execute_query('node2', "SELECT titleId FROM movies WHERE titleId=%s", (title_id,), commit_immediately=True)
-            
-            # If rows_affected > 0, it means Node 2 has it. Otherwise, it must be Node 3.
-            primary_target_node = 'node2' if res_n2['rows_affected'] > 0 else 'node3'
-        else:
-            primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-        # --- FIX ENDS HERE ---
-        
+        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
         query = "DELETE FROM movies WHERE titleId = %s"
         params = (title_id,)
 
