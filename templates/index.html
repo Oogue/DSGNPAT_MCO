@@ -20,96 +20,97 @@
     <div id="node-view" class="node-view active">
         <div class="view-header">
             <div>
-                <span style="font-size: 24px; font-weight: bold;" id="current-node-title">Distributed Database Management</span>
-            </div>
-            
-            <div class="node-status-section">
-                <h3>Node Status Overview</h3>
-                <div class="nodes-grid">
-
-                    <!-- Node 1 Card -->
-                    <div class="node-card">
-                        <div class="node-header">
-                            <div class="node-title">Node 1 (Central)</div>
-                            <span class="status-indicator status-online" id="node1-status">LOADING...</span>
-                        </div>
-                        <div class="node-info">
-                            <div class="info-row">
-                                <span class="info-label">Last Update:</span>
-                                <span id="node1-update">--</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Rows:</span>
-                                <span id="node1-rows">--</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Node 2 Card -->
-                    <div class="node-card">
-                        <div class="node-header">
-                            <div class="node-title">Node 2 (Regional)</div>
-                            <span class="status-indicator status-online" id="node2-status">LOADING...</span>
-                        </div>
-                        <div class="node-info">
-                            <div class="info-row">
-                                <span class="info-label">Last Update:</span>
-                                <span id="node2-update">--</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Rows:</span>
-                                <span id="node2-rows">--</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Node 3 Card -->
-                    <div class="node-card">
-                        <div class="node-header">
-                            <div class="node-title">Node 3 (Regional)</div>
-                            <span class="status-indicator status-online" id="node3-status">LOADING...</span>
-                        </div>
-                        <div class="node-info">
-                            <div class="info-row">
-                                <span class="info-label">Last Update:</span>
-                                <span id="node3-update">--</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Rows:</span>
-                                <span id="node3-rows">--</span>
-                            </div>
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-
-            <div class="node-settings">
-                <div class="form-group">
-                    <label for="isolation-level">Transaction Isolation Level</label>
-                    <select id="isolation-level">
-                        <option value="READ_UNCOMMITTED">Read Uncommitted</option>
-                        <option value="READ_COMMITTED">Read Committed</option>
-                        <option value="REPEATABLE_READ">Repeatable Read</option>
-                        <option value="SERIALIZABLE">Serializable</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="failure-simulation">Failure Simulation</label>
-                    <select id="failure-simulation">
-                        <option value="none">None</option>
-                        <option value="crash-node1-write">Crash Node 1 during write</option>
-                        <option value="crash-node23-write">Crash Node 2/3 during write</option>
-                        <option value="central-offline">Central Node offline</option>
-                        <option value="regional-offline">Regional Node offline</option>
-                    </select>
-                </div>
-                
-                <button onclick="applySettings()">Apply Settings</button>
+                <span style="font-size: 24px; font-weight: bold;">Distributed Database Management</span>
             </div>
         </div>
-    </div>
+
+        <!-- Node Status Section (moved outside view-header) -->
+        <div class="node-status-section">
+            <h3>Node Status Overview</h3>
+            <div class="nodes-grid">
+
+                <!-- Node 1 Card -->
+                <div class="node-card">
+                    <div class="node-header">
+                        <div class="node-title">Node 1 (Central)</div>
+                        <span class="status-indicator status-online" id="node1-status">LOADING...</span>
+                    </div>
+                    <div class="node-info">
+                        <div class="info-row">
+                            <span class="info-label">Last Update:</span>
+                            <span id="node1-update">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Rows:</span>
+                            <span id="node1-rows">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Node 2 Card -->
+                <div class="node-card">
+                    <div class="node-header">
+                        <div class="node-title">Node 2 (Regional)</div>
+                        <span class="status-indicator status-online" id="node2-status">LOADING...</span>
+                    </div>
+                    <div class="node-info">
+                        <div class="info-row">
+                            <span class="info-label">Last Update:</span>
+                            <span id="node2-update">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Rows:</span>
+                            <span id="node2-rows">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Node 3 Card -->
+                <div class="node-card">
+                    <div class="node-header">
+                        <div class="node-title">Node 3 (Regional)</div>
+                        <span class="status-indicator status-online" id="node3-status">LOADING...</span>
+                    </div>
+                    <div class="node-info">
+                        <div class="info-row">
+                            <span class="info-label">Last Update:</span>
+                            <span id="node3-update">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Rows:</span>
+                            <span id="node3-rows">--</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Settings Section (moved outside view-header, below node status) -->
+        <div class="node-settings">
+            <div class="form-group">
+                <label for="isolation-level">Transaction Isolation Level</label>
+                <select id="isolation-level">
+                    <option value="READ_UNCOMMITTED">Read Uncommitted</option>
+                    <option value="READ_COMMITTED">Read Committed</option>
+                    <option value="REPEATABLE_READ">Repeatable Read</option>
+                    <option value="SERIALIZABLE">Serializable</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="failure-simulation">Failure Simulation</label>
+                <select id="failure-simulation">
+                    <option value="none">None</option>
+                    <option value="crash-node1-write">Crash Node 1 during write</option>
+                    <option value="crash-node23-write">Crash Node 2/3 during write</option>
+                    <option value="central-offline">Central Node offline</option>
+                    <option value="regional-offline">Regional Node offline</option>
+                </select>
+            </div>
+            
+            <button onclick="applySettings()">Apply Settings</button>
+        </div>
 
         <!-- Row Count Display -->
         <div class="row-count-display">
