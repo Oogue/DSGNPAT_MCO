@@ -308,14 +308,12 @@ async function submitUpdate() {
     }
 }
 
-async function deleteRow(titleId) {
+async function deleteRow(titleId, region) {
     if (!confirm(`Are you sure you want to delete ${titleId}?`)) {
         return;
     }
 
     try {
-
-        const region = currentEditingRegion;  
         print(`NodeView region: ${region}`);
         const response = await fetch('/delete', {
             method: 'POST',
