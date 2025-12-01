@@ -20,58 +20,68 @@
     <div id="node-view" class="node-view active">
         <div class="view-header">
             <div>
-                <!--<button class="back-button" onclick="navigateToDashboard()">← Back</button>-->
-                <span style="font-size: 24px; font-weight: bold;" id="current-node-title">Node 1</span>
+                <span style="font-size: 24px; font-weight: bold;" id="current-node-title">Distributed Database Management</span>
             </div>
+            
             <div class="node-status-section">
-            <h3>Node Status Overview</h3>
-            <div class="nodes-grid">
+                <h3>Node Status Overview</h3>
+                <div class="nodes-grid">
 
-                <div class="node-header">
-                    <div class="node-title">Node 1 (Central)</div>
-                    <span class="status-indicator status-online" id="node1-status">LOADING...</span>
-                </div>
-                <div class="node-info">
-                    <div class="info-row">
-                        <span class="info-label">Last Update:</span>
-                        <span id="node1-update">--</span>
+                    <!-- Node 1 Card -->
+                    <div class="node-card">
+                        <div class="node-header">
+                            <div class="node-title">Node 1 (Central)</div>
+                            <span class="status-indicator status-online" id="node1-status">LOADING...</span>
+                        </div>
+                        <div class="node-info">
+                            <div class="info-row">
+                                <span class="info-label">Last Update:</span>
+                                <span id="node1-update">--</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Rows:</span>
+                                <span id="node1-rows">--</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="info-row">
-                        <span class="info-label">Rows:</span>
-                        <span id="node1-rows">--</span>
-                    </div>
-                </div>
 
-                <div class="node-header">
-                    <div class="node-title">Node 2 (Regional)</div>
-                    <span class="status-indicator status-online" id="node2-status">LOADING...</span>
-                </div>
-                <div class="node-info">
-                    <div class="info-row">
-                        <span class="info-label">Last Update:</span>
-                        <span id="node2-update">--</span>
+                    <!-- Node 2 Card -->
+                    <div class="node-card">
+                        <div class="node-header">
+                            <div class="node-title">Node 2 (Regional)</div>
+                            <span class="status-indicator status-online" id="node2-status">LOADING...</span>
+                        </div>
+                        <div class="node-info">
+                            <div class="info-row">
+                                <span class="info-label">Last Update:</span>
+                                <span id="node2-update">--</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Rows:</span>
+                                <span id="node2-rows">--</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="info-row">
-                        <span class="info-label">Rows:</span>
-                        <span id="node2-rows">--</span>
-                    </div>
-                </div>
 
-                <div class="node-header">
-                    <div class="node-title">Node 3 (Regional)</div>
-                    <span class="status-indicator status-online" id="node3-status">LOADING...</span>
-                </div>
-                <div class="node-info">
-                    <div class="info-row">
-                        <span class="info-label">Last Update:</span>
-                        <span id="node3-update">--</span>
+                    <!-- Node 3 Card -->
+                    <div class="node-card">
+                        <div class="node-header">
+                            <div class="node-title">Node 3 (Regional)</div>
+                            <span class="status-indicator status-online" id="node3-status">LOADING...</span>
+                        </div>
+                        <div class="node-info">
+                            <div class="info-row">
+                                <span class="info-label">Last Update:</span>
+                                <span id="node3-update">--</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Rows:</span>
+                                <span id="node3-rows">--</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="info-row">
-                        <span class="info-label">Rows:</span>
-                        <span id="node3-rows">--</span>
-                    </div>
-                </div>
 
+                </div>
             </div>
 
             <div class="node-settings">
@@ -98,8 +108,8 @@
                 
                 <button onclick="applySettings()">Apply Settings</button>
             </div>
-    </div>
         </div>
+    </div>
 
         <!-- Row Count Display -->
         <div class="row-count-display">

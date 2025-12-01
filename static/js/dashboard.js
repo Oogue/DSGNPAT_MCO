@@ -13,8 +13,8 @@ function navigateToNode(nodeNumber) {
     currentNode = nodeNumber;
     document.getElementById('dashboard-view').style.display = 'none';
     document.getElementById('node-view').classList.add('active');
-    document.getElementById('current-node-title').textContent = 
-        nodeNumber === 1 ? 'Node 1 (Central)' : `Node ${nodeNumber} (Regional)`;
+    //document.getElementById('current-node-title').textContent = 
+    //    nodeNumber === 1 ? 'Node 1 (Central)' : `Node ${nodeNumber} (Regional)`;
     
     loadNodeData(nodeNumber);
 }
@@ -102,8 +102,8 @@ function startStatusMonitoring() {
     // Initial load
     loadNodeStatus();
     
-    // TODO: Uncomment to enable auto-refresh every 10 seconds
-    // setInterval(loadNodeStatus, 10000);
+    //to enable auto-refresh every 10 seconds
+    setInterval(loadNodeStatus, 10000);
 }
 
 // Start monitoring when page loads
