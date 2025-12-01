@@ -611,16 +611,42 @@ def delete_movie():
         txn_id = str(uuid.uuid4())
         
         title_id = data.get('titleId')
-        # We assume region is passed for routing to determine primary
-        region = data.get('region') 
+        region = data.get('region')
         
-        print(f"\n--- PROCESSING DELETE: {title_id} ---")
+        # IMPROVEMENT: If region is missing, try to fetch it from the database first
+        if not region or region == '':
+            print(f"Region not provided for {title_id}, attempting to locate record...")
+            # Try to find the record in all nodes to get the region
+            for node_key in ['node1', 'node2', 'node3']:
+                conn = get_db_connection(node_key)
+                if conn:
+                    try:
+                        cursor = conn.cursor(dictionary=True)
+                        cursor.execute("SELECT region FROM movies WHERE titleId = %s LIMIT 1", (title_id,))
+                        result = cursor.fetchone()
+                        cursor.close()
+                        conn.close()
+                        if result:
+                            region = result.get('region', '')
+                            print(f"Found record in {node_key} with region: {region}")
+                            break
+                    except Exception as e:
+                        print(f"Error searching {node_key}: {e}")
+                        if conn:
+                            conn.close()
+        
+        if not region:
+            return jsonify({
+                "status": "ERROR",
+                "error": "Could not determine region for record. Region is required for proper routing."
+            }), 400
+        
+        print(f"\n--- PROCESSING DELETE: {title_id} ({region}) ---")
         
         params = (title_id,)
-        
         query = "DELETE FROM movies WHERE titleId = %s"
 
-        # 1. Determine Nodes (Same logic as Insert/Update)
+        # Determine Nodes
         primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         
@@ -639,6 +665,7 @@ def delete_movie():
             'region': region 
         }
         LOG_MANAGER.log_local_commit(txn_id, 'DELETE', title_id, new_value)
+        
         # --- CRASH SIMULATION POINT ---
         if SIMULATE_CRASH_MODE:
             print("\n!!! CRASH MODE ACTIVE !!!")

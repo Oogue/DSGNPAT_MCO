@@ -295,16 +295,28 @@ async function submitUpdate() {
     }
 }
 
-async function deleteRow(titleId) {
+// REPLACE the deleteRow function in nodeView.js with this:
+
+async function deleteRow(titleId, region) {
     if (!confirm(`Are you sure you want to delete ${titleId}?`)) {
         return;
+    }
+
+    // If region wasn't passed, try to find it from the table or ask user
+    if (!region) {
+        console.warn('Region not provided for delete operation');
+        // You could try to find it from the current data or default to a value
+        region = ''; // Backend will need to handle this case
     }
 
     try {
         const response = await fetch('/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ titleId: titleId })
+            body: JSON.stringify({ 
+                titleId: titleId,
+                region: region  // ← ADD THIS
+            })
         });
 
         const result = await response.json();
