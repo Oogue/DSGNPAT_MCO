@@ -376,7 +376,36 @@ def delete_movie():
         data = request.json
         txn_id = str(uuid.uuid4())
         title_id = data.get('titleId')
-        region = data.get('region') # Needed for routing
+        region = data.get('region')
+        
+        # IMPROVEMENT: If region is missing, try to fetch it from the database first
+        if not region or region == '':
+            print(f"Region not provided for {title_id}, attempting to locate record...")
+            # Try to find the record in all nodes to get the region
+            for node_key in ['node1', 'node2', 'node3']:
+                conn = get_db_connection(node_key, autocommit_conn=True)
+                if conn:
+                    try:
+                        cursor = conn.cursor(dictionary=True)
+                        cursor.execute("SELECT region FROM movies WHERE titleId = %s LIMIT 1", (title_id,))
+                        result = cursor.fetchone()
+                        cursor.close()
+                        conn.close()
+                        if result:
+                            region = result.get('region', '')
+                            print(f"Found record in {node_key} with region: {region}")
+                            break
+                    except Exception as e:
+                        print(f"Error searching {node_key}: {e}")
+                        if conn and conn.is_connected():
+                            conn.close()
+        
+        if not region:
+            return jsonify({
+                "status": "ERROR",
+                "error": "Could not determine region for record. Region is required for proper routing.",
+                "logs": ["ERROR: Region not found"]
+            }), 400
         
         primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
         query = "DELETE FROM movies WHERE titleId = %s"
@@ -391,27 +420,62 @@ def delete_movie():
                     'status': 'PENDING_MANUAL',
                     'connections': { primary_target_node: res['conn_obj'] }
                 }
-                return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused DELETE on {primary_target_node}. Row locked."]})
-            return jsonify({"status": "FAILED"})
+                return jsonify({
+                    "status": "MANUAL_PENDING", 
+                    "txn_id": txn_id, 
+                    "logs": [f"Paused DELETE on {primary_target_node}. Row locked."]
+                })
+            return jsonify({
+                "status": "FAILED",
+                "error": res.get('error'),
+                "logs": [f"Failed to lock row on {primary_target_node}"]
+            })
 
         # === RECOVERY V3 MODE ===
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         res_primary = execute_query(primary_target_node, query, params)
+        
+        # Log the transaction
         LOG_MANAGER.log_local_commit(txn_id, 'DELETE', title_id, {'titleId': title_id, 'region': region})
         
-        if SIMULATE_CRASH_MODE: time.sleep(10)
+        if SIMULATE_CRASH_MODE: 
+            time.sleep(10)
+        
+        logs = []
         
         if not res_primary['success']:
             LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
             LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
+            logs.append(f"Primary delete on {primary_target_node} failed. Queued for recovery.")
+        else:
+            logs.append(f"Successfully deleted from {primary_target_node}")
 
         if replication_target_node:
-            execute_query(replication_target_node, query, params)
+            res_replica = execute_query(replication_target_node, query, params)
+            if res_replica['success']:
+                logs.append(f"Successfully deleted from {replication_target_node}")
+                if res_primary['success']:
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
+            else:
+                logs.append(f"Replication to {replication_target_node} failed. Queued for recovery.")
+                if res_primary['success']:
+                    LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
+                    LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
 
-        return jsonify({"status": "COMPLETED", "txn_id": txn_id})
+        return jsonify({
+            "status": "COMPLETED", 
+            "txn_id": txn_id,
+            "logs": logs
+        })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc()
+        return jsonify({
+            "status": "ERROR",
+            "error": str(e),
+            "logs": [f"CRITICAL ERROR: {str(e)}"]
+        }), 500
 
 # --- SETTINGS & MANUAL RESOLUTION ---
 

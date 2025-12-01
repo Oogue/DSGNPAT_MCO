@@ -307,16 +307,24 @@ async function submitUpdate() {
     }
 }
 
-async function deleteRow(titleId) {
+async function deleteRow(titleId, region) {
     if (!confirm(`Are you sure you want to delete ${titleId}?`)) {
         return;
+    }
+
+    // If region wasn't passed, warn but continue
+    if (!region) {
+        console.warn('Region not provided for delete operation');
     }
 
     try {
         const response = await fetch('/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ titleId: titleId })
+            body: JSON.stringify({ 
+                titleId: titleId,
+                region: region  // ← ADD THIS
+            })
         });
 
         const result = await response.json();
