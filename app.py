@@ -598,6 +598,94 @@ def toggle_crash_mode():
     SIMULATE_CRASH_MODE = not SIMULATE_CRASH_MODE
     return jsonify({"status": "ENABLED" if SIMULATE_CRASH_MODE else "DISABLED"})
 
+# ROUTE: Report #1 - Regional Distribution
+@app.route('/report/distribution', methods=['GET'])
+def report_distribution():
+    """Generates Report 1: Count of movies per region"""
+    target_node = request.args.get('node', 'node1')
+    
+    # We query the target node directly to see what IT sees
+    conn = get_db_connection(target_node)
+    if not conn:
+        return jsonify({"error": "Could not connect to node"}), 500
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+        # Simple aggregation query
+        query = """
+            SELECT region, COUNT(*) as count 
+            FROM movies 
+            GROUP BY region 
+            ORDER BY count DESC
+        """
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        # Format as text report
+        report_lines = [f"REPORT: Regional Distribution (Source: {target_node})", "="*50]
+        report_lines.append(f"{'REGION':<15} | {'COUNT':<10}")
+        report_lines.append("-" * 30)
+        
+        total = 0
+        for row in results:
+            r = row['region'] if row['region'] else 'Unknown'
+            c = row['count']
+            report_lines.append(f"{r:<15} | {c:<10}")
+            total += c
+            
+        report_lines.append("-" * 30)
+        report_lines.append(f"{'TOTAL':<15} | {total:<10}")
+        
+        return jsonify({"report": "\n".join(report_lines)})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+# ROUTE: Report #2 - Content Type Breakdown
+@app.route('/report/types', methods=['GET'])
+def report_types():
+    """Generates Report 2: Count of movies per content type"""
+    target_node = request.args.get('node', 'node1')
+    conn = get_db_connection(target_node)
+    if not conn:
+        return jsonify({"error": "Could not connect to node"}), 500
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+        query = """
+            SELECT types, COUNT(*) as count 
+            FROM movies 
+            GROUP BY types 
+            ORDER BY count DESC
+        """
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        report_lines = [f"REPORT: Content Type Breakdown (Source: {target_node})", "="*50]
+        report_lines.append(f"{'TYPE':<20} | {'COUNT':<10}")
+        report_lines.append("-" * 35)
+        
+        total = 0
+        for row in results:
+            t = row['types'] if row['types'] else 'Unknown'
+            # Truncate long types for text display
+            t_display = (t[:17] + '..') if len(t) > 17 else t
+            c = row['count']
+            report_lines.append(f"{t_display:<20} | {c:<10}")
+            total += c
+            
+        report_lines.append("-" * 35)
+        report_lines.append(f"{'TOTAL':<20} | {total:<10}")
+        
+        return jsonify({"report": "\n".join(report_lines)})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
 if __name__ == '__main__':
     start_background_recovery()
     app.run(host='0.0.0.0', port=80)
