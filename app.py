@@ -126,7 +126,13 @@ def _execute_recovery_cycle():
             # Target Logic
             if not target_node or str(target_node) == '0':
                 region = payload.get('region')
-                primary = 'node2' if region in ['US', 'JP'] else 'node3'
+                primary = ''
+                if region in ['US', 'JP']:
+                    primary = 'node2'
+                elif region in ['FR', 'ES']:
+                    primary = 'node3'
+                else:
+                    return jsonify({"error": "Unknown region for routing."}), 400
                 if LOCAL_NODE_KEY == primary: target_node = 'node1'
                 elif LOCAL_NODE_KEY == 'node1': target_node = primary
                 else: target_node = 'node1' 
@@ -425,8 +431,14 @@ def delete_movie():
                     conn_central.close()
             else:
                  return jsonify({"error": "Central Node Unavailable."}), 500
+        primary_target_node = ''
+        if region in ['US', 'JP']:
+            primary_target_node = 'node2'
+        elif region in ['FR', 'ES']:
+            primary_target_node = 'node3'
+        else:
+            return jsonify({"error": "Unknown region for routing."}), 400
         
-        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
         query = "DELETE FROM movies WHERE titleId = %s"
         params = (title_id,)
 
