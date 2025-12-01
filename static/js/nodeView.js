@@ -282,7 +282,13 @@ async function submitUpdate() {
         const result = await response.json();
         
         // Show Feedback
-        alert(`Update Status:\n${result.logs.join('\n')}`);
+        if (result.logs && Array.isArray(result.logs)) {
+            alert(`Update Status:\n${result.logs.join('\n')}`);
+        } else if (result.error) {
+            alert(`Update Failed:\n${result.error}\nDetails: ${result.details || ''}`);
+        } else {
+            alert(`Update Status:\n${JSON.stringify(result)}`);
+        }
         
         // Refresh Data
         closeEditModal();

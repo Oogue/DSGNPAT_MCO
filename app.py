@@ -364,7 +364,13 @@ def update_movie():
         return jsonify({"status": "COMPLETED", "txn_id": txn_id})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc()
+        return jsonify({
+            "status": "CRASH",
+            "error": "Internal Server Error trapped",
+            "details": str(e),
+            "logs": ["CRITICAL ERROR: " + str(e)]  # <--- Add this!
+        }), 500
 
 # --- DELETE (Combined Logic) ---
 @app.route('/delete', methods=['POST'])
