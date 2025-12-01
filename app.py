@@ -55,10 +55,8 @@ CORS(app)
 
 # --- HELPER: Execute Query with Concurrency Support ---
 def execute_query(node_key, query, params=None, commit_immediately=None):
-    # Determine mode: Manual Override > Global Setting
     auto_commit_enabled = commit_immediately if commit_immediately is not None else GLOBAL_SETTINGS['auto_commit']
     
-    # Connect with specific Isolation Level
     conn = get_db_connection(
         node_key, 
         isolation_level=GLOBAL_SETTINGS['isolation_level'], 
