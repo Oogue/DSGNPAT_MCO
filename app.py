@@ -103,9 +103,9 @@ def get_row_count(node_key):
 def get_last_update(node_key):
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-# --- RECOVERY LOGIC (Your Existing V3 Code) ---
+# --- RECOVERY LOGIC ---
 def _execute_recovery_cycle():
-    conn = get_db_connection(LOCAL_NODE_KEY) # autocommit defaults to True which is fine here
+    conn = get_db_connection(LOCAL_NODE_KEY)
     if not conn: return {"success": False, "error": "Local DB Error"}
 
     try:
@@ -281,11 +281,9 @@ def insert_movie():
                 return jsonify({"status": "FAILED", "error": res.get('error')})
 
         # === RECOVERY V3 MODE (Auto Commit ON) ===
-        # (Your existing logic)
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         logs = []
         
-        # 1. Primary
         res_primary = execute_query(primary_target_node, query, params)
         LOG_MANAGER.log_local_commit(txn_id, 'INSERT', data.get('titleId'), data)
         
@@ -297,7 +295,6 @@ def insert_movie():
             LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
             logs.append(f"Primary {primary_target_node} Failed. Queued.")
 
-        # 2. Replica
         if replication_target_node:
             res_replica = execute_query(replication_target_node, query, params)
             if res_replica['success'] and primary_success:
@@ -369,7 +366,7 @@ def update_movie():
             "status": "CRASH",
             "error": "Internal Server Error trapped",
             "details": str(e),
-            "logs": ["CRITICAL ERROR: " + str(e)]  # <--- Add this!
+            "logs": ["CRITICAL ERROR: " + str(e)]
         }), 500
 
 # --- DELETE (Combined Logic) ---
@@ -416,7 +413,7 @@ def delete_movie():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- NEW ROUTES: SETTINGS & MANUAL RESOLUTION ---
+# --- SETTINGS & MANUAL RESOLUTION ---
 
 @app.route('/settings', methods=['POST'])
 def update_settings():
