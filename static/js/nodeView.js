@@ -313,8 +313,9 @@ async function deleteRow(titleId) {
     }
 
     try {
-        
+
         const region = currentEditingRegion;  
+        print(`NodeView region: ${region}`);
         const response = await fetch('/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
