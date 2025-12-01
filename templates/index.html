@@ -9,11 +9,18 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
-    <!-- Dashboard View -->
+    <!--Node container-->
+    <div id="app-config" 
+        data-current-node="{{ current_node }}" 
+        data-current-node-id="{{ current_node_id }}" 
+        style="display: none;">
+    </div>
+
+<!-- Dashboard View 
     <div id="dashboard-view" class="container">
         <h1>Distributed Database Dashboard</h1>
 
-        <!-- Settings Section -->
+        Settings Section
         <div class="settings-section">
             <div class="form-group">
                 <label for="isolation-level">Isolation Level</label>
@@ -39,9 +46,24 @@
             <button onclick="applySettings()">Apply Settings</button>
         </div>
 
-        <!-- Nodes Grid -->
+        Nodes Grid
         <div class="nodes-grid">
-            <div class="node-card" onclick="navigateToNode(1)">
+            
+        </div>
+    </div>
+-->
+
+    <!-- Node View Template -->
+    <div id="node-view" class="node-view active">
+        <div class="view-header">
+            <div>
+                <!--<button class="back-button" onclick="navigateToDashboard()">← Back</button>-->
+                <span style="font-size: 24px; font-weight: bold;" id="current-node-title">Node 1</span>
+            </div>
+            <div class="node-status-section">
+            <h3>Node Status Overview</h3>
+            <div class="nodes-grid">
+
                 <div class="node-header">
                     <div class="node-title">Node 1 (Central)</div>
                     <span class="status-indicator status-online" id="node1-status">LOADING...</span>
@@ -56,14 +78,11 @@
                         <span id="node1-rows">--</span>
                     </div>
                 </div>
-            </div>
 
-            <div class="node-card" onclick="navigateToNode(2)">
                 <div class="node-header">
                     <div class="node-title">Node 2 (Regional)</div>
                     <span class="status-indicator status-online" id="node2-status">LOADING...</span>
                 </div>
-
                 <div class="node-info">
                     <div class="info-row">
                         <span class="info-label">Last Update:</span>
@@ -74,9 +93,7 @@
                         <span id="node2-rows">--</span>
                     </div>
                 </div>
-            </div>
 
-            <div class="node-card" onclick="navigateToNode(3)">
                 <div class="node-header">
                     <div class="node-title">Node 3 (Regional)</div>
                     <span class="status-indicator status-online" id="node3-status">LOADING...</span>
@@ -91,17 +108,34 @@
                         <span id="node3-rows">--</span>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
 
-    <!-- Node View Template -->
-    <div id="node-view" class="container node-view">
-        <div class="view-header">
-            <div>
-                <button class="back-button" onclick="navigateToDashboard()">← Back</button>
-                <span style="font-size: 24px; font-weight: bold;" id="current-node-title">Node 1</span>
             </div>
+
+            <div class="node-settings">
+                <div class="form-group">
+                    <label for="isolation-level">Transaction Isolation Level</label>
+                    <select id="isolation-level">
+                        <option value="READ_UNCOMMITTED">Read Uncommitted</option>
+                        <option value="READ_COMMITTED">Read Committed</option>
+                        <option value="REPEATABLE_READ">Repeatable Read</option>
+                        <option value="SERIALIZABLE">Serializable</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="failure-simulation">Failure Simulation</label>
+                    <select id="failure-simulation">
+                        <option value="none">None</option>
+                        <option value="crash-node1-write">Crash Node 1 during write</option>
+                        <option value="crash-node23-write">Crash Node 2/3 during write</option>
+                        <option value="central-offline">Central Node offline</option>
+                        <option value="regional-offline">Regional Node offline</option>
+                    </select>
+                </div>
+                
+                <button onclick="applySettings()">Apply Settings</button>
+            </div>
+    </div>
         </div>
 
         <!-- Row Count Display -->

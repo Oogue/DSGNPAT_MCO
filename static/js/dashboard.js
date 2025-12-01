@@ -1,23 +1,27 @@
 let currentNode = null;
 
 function navigateToNode(nodeNumber) {
+    const config = document.getElementById('app-config');
+    const allowedNode = parseInt(config.getAttribute('data-current-node-id'));
+    
+    // Only allow viewing the current server's node
+    if (nodeNumber !== allowedNode) {
+        alert(`You can only view ${config.getAttribute('data-current-node')} from this server.`);
+        return;
+    }
+    
     currentNode = nodeNumber;
     document.getElementById('dashboard-view').style.display = 'none';
     document.getElementById('node-view').classList.add('active');
     document.getElementById('current-node-title').textContent = 
         nodeNumber === 1 ? 'Node 1 (Central)' : `Node ${nodeNumber} (Regional)`;
     
-    // Load data for the selected node
     loadNodeData(nodeNumber);
 }
 
 function navigateToDashboard() {
-    document.getElementById('node-view').classList.remove('active');
-    document.getElementById('dashboard-view').style.display = 'block';
-    currentNode = null;
-    
-    // Refresh node status when returning to dashboard
-    loadNodeStatus();
+    // Disabled - dashboard view not accessible in single-node mode
+    alert("Dashboard view is not available. Each server shows only its own node.");
 }
 
 function applySettings() {
@@ -104,5 +108,14 @@ function startStatusMonitoring() {
 
 // Start monitoring when page loads
 document.addEventListener('DOMContentLoaded', function() {
+    // Read the current node from the hidden config div
+    const config = document.getElementById('app-config');
+    const currentNodeKey = config.getAttribute('data-current-node'); // e.g., "node1"
+    const currentNodeId = parseInt(config.getAttribute('data-current-node-id')); // e.g., 1
+    
+    // Auto-navigate to this node's view
+    navigateToNode(currentNodeId);
+    
+    // Start status monitoring
     startStatusMonitoring();
 });
