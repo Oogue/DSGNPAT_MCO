@@ -259,7 +259,12 @@ def insert_movie():
         data = request.json
         txn_id = str(uuid.uuid4())
         region = data.get('region')
-        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+        if region in ['US', 'JP']:
+            primary_target_node = 'node2'
+        elif region in ['FR', 'ES']:
+            primary_target_node = 'node3'
+        else:
+            return jsonify({"error": "Unknown region for routing."}), 400
         
         params = (data.get('titleId'), data.get('ordering'), data.get('title'), region, data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle'))
         query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
@@ -345,7 +350,12 @@ def update_movie():
             else:
                 return jsonify({"error": "Central Node Unavailable. Cannot determine region for routing."}), 500
 
-        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+        if region in ['US', 'JP']:
+            primary_target_node = 'node2'
+        elif region in ['FR', 'ES']:
+            primary_target_node = 'node3'
+        else:
+            return jsonify({"error": "Unknown region for routing."}), 400
 
         params = (data.get('title'), data.get('ordering'), title_id)
         query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"

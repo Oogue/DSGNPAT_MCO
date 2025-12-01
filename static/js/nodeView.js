@@ -275,7 +275,7 @@ async function submitUpdate() {
         title: title,
         region: region
     };
-
+    
     console.log('Updating:', payload);
 
     try {
