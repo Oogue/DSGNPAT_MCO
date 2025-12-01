@@ -266,25 +266,43 @@ def insert_movie():
 
         # === CONCURRENCY SIMULATION MODE (Auto Commit OFF) ===
         if not GLOBAL_SETTINGS['auto_commit']:
-            repl_target = 'node1' if primary_target_node != 'node1' else None
-            # Execute on Primary ONLY (to create the lock) and HOLD.
-            print(f"Manual Mode: Locking {primary_target_node}")
-            res = execute_query(primary_target_node, query, params, commit_immediately=False)
+            print(f"Manual Mode: Locking {primary_target_node} AND node1")
             
-            if res['success']:
+            # 1. Execute on Primary (Node 2 or 3)
+            res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
+            
+            # 2. Execute on Central (Node 1) - effectively a "Dual Write" lock
+            res_central = execute_query('node1', query, params, commit_immediately=False)
+            
+            if res_primary['success'] and res_central['success']:
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'INSERT', 
                     'status': 'PENDING_MANUAL',
-                    'connections': { primary_target_node: res['conn_obj'] },
+                    # Store BOTH connections here. The resolve_transaction function 
+                    # already knows how to loop through this dictionary and commit all of them.
+                    'connections': { 
+                        primary_target_node: res_primary['conn_obj'],
+                        'node1': res_central['conn_obj']
+                    },
+                    # IMPORTANT: Set replication target to None. 
+                    # Since we are manually writing to Node 1 now, we don't need to 
+                    # "replicate" to it again after the commit.
                     'replication': {
-                        'target': repl_target,
+                        'target': None, 
                         'query': query,
                         'params': params
                     }
                 }
-                return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused INSERT on {primary_target_node}. Row locked."]})
+                return jsonify({
+                    "status": "MANUAL_PENDING", 
+                    "txn_id": txn_id, 
+                    "logs": [f"Paused INSERT. Locked {primary_target_node} and Node 1 (Central)."]
+                })
             else:
-                return jsonify({"status": "FAILED", "error": res.get('error')})
+                # Cleanup if one failed
+                if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
+                if res_central.get('conn_obj'): res_central['conn_obj'].close()
+                return jsonify({"status": "FAILED", "error": "Failed to acquire locks on both nodes."})
 
         # === RECOVERY V3 MODE (Auto Commit ON) ===
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
@@ -352,21 +370,35 @@ def update_movie():
 
         # === CONCURRENCY SIMULATION MODE ===
         if not GLOBAL_SETTINGS['auto_commit']:
-            res = execute_query(primary_target_node, query, params, commit_immediately=False)
-            if res['success']:
-                repl_target = 'node1' if primary_target_node != 'node1' else None
+            # Lock Primary
+            res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
+            # Lock Central
+            res_central = execute_query('node1', query, params, commit_immediately=False)
+
+            if res_primary['success'] and res_central['success']:
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'UPDATE', 
                     'status': 'PENDING_MANUAL',
-                    'connections': { primary_target_node: res['conn_obj'] },
+                    'connections': { 
+                        primary_target_node: res_primary['conn_obj'],
+                        'node1': res_central['conn_obj']
+                    },
                     'replication': {
-                        'target': repl_target,
+                        'target': None, # No post-commit replication needed
                         'query': query,
                         'params': params
                     }
                 }
-                return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused UPDATE on {primary_target_node}. Row locked."]})
-            return jsonify({"status": "FAILED", "error": res.get('error')})
+                return jsonify({
+                    "status": "MANUAL_PENDING", 
+                    "txn_id": txn_id, 
+                    "logs": [f"Paused UPDATE. Locked {primary_target_node} and Node 1."]
+                })
+            
+            # Cleanup
+            if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
+            if res_central.get('conn_obj'): res_central['conn_obj'].close()
+            return jsonify({"status": "FAILED", "error": "Failed to acquire locks."})
 
         # === RECOVERY V3 MODE ===
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
@@ -422,21 +454,32 @@ def delete_movie():
 
         # === CONCURRENCY SIMULATION MODE ===
         if not GLOBAL_SETTINGS['auto_commit']:
-            res = execute_query(primary_target_node, query, params, commit_immediately=False)
-            if res['success']:
-                repl_target = 'node1' if primary_target_node != 'node1' else None
+            res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
+            res_central = execute_query('node1', query, params, commit_immediately=False)
+
+            if res_primary['success'] and res_central['success']:
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'DELETE', 
                     'status': 'PENDING_MANUAL',
-                    'connections': { primary_target_node: res['conn_obj'] },
+                    'connections': { 
+                        primary_target_node: res_primary['conn_obj'], 
+                        'node1': res_central['conn_obj']
+                    },
                     'replication': {
-                        'target': repl_target,
+                        'target': None,
                         'query': query,
                         'params': params
                     }
                 }
-                return jsonify({"status": "MANUAL_PENDING", "txn_id": txn_id, "logs": [f"Paused DELETE on {primary_target_node}. Row locked."]})
-            return jsonify({"status": "FAILED", "error": res.get('error')})
+                return jsonify({
+                    "status": "MANUAL_PENDING", 
+                    "txn_id": txn_id, 
+                    "logs": [f"Paused DELETE. Locked {primary_target_node} and Node 1."]
+                })
+            
+            if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
+            if res_central.get('conn_obj'): res_central['conn_obj'].close()
+            return jsonify({"status": "FAILED", "error": "Failed to acquire locks."})
 
         # === RECOVERY V3 MODE ===
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
