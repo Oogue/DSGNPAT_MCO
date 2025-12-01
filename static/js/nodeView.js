@@ -35,7 +35,7 @@ async function fetchMovies() {
             titleId: currentFilters.titleId,
             title: currentFilters.title,
             region: currentFilters.region,
-            node: `node${activeNode}`
+            node: `node2`
         });
 
         // Fetch movies from backend
@@ -275,7 +275,7 @@ async function submitUpdate() {
         title: title,
         region: region
     };
-    
+
     console.log('Updating:', payload);
 
     try {
