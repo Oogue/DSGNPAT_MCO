@@ -26,16 +26,100 @@ function navigateToDashboard() {
 
 function applySettings() {
     const isolationLevel = document.getElementById('isolation-level').value;
-    const failureSimulation = document.getElementById('failure-simulation').value;
+    const autoCommitToggle = document.getElementById('autocommit-toggle').checked;
     
-    console.log('Applying settings:', { isolationLevel, failureSimulation });
+    console.log('Applying settings:', { isolationLevel, autoCommit: autoCommitToggle });
     
     // TODO: Send settings to backend
     // - Apply isolation level to transactions
     // - Configure failure simulation scenarios
     // - Update backend transaction handling
     
-    alert(`Settings applied:\nIsolation Level: ${isolationLevel}\nFailure Simulation: ${failureSimulation}`);
+    const modeText = autoCommitToggle ? "Auto Commit (Atomic)" : "Manual 2PC (Pause)";
+    alert(`Settings applied:\nIsolation Level: ${isolationLevel}\nTransaction Mode: ${modeText}`);
+
+    updateCommitButtonState();
+}
+
+function updateCommitButtonState() {
+    const toggle = document.getElementById('autocommit-toggle');
+    const btn = document.getElementById('commit-changes-btn');
+    
+    if (toggle.checked) {
+        // Auto Commit is ON -> Disable Manual Commit Button
+        btn.disabled = true;
+        btn.title = "Switch to Manual Mode to use this button";
+    } else {
+        // Manual Mode is ON -> Enable Button
+        btn.disabled = false;
+        btn.title = "View pending transactions";
+    }
+}
+
+// --- NEW FUNCTIONS FOR COMMIT MODAL ---
+
+function openCommitModal() {
+    document.getElementById('commit-modal').classList.add('active');
+    refreshPendingTransactions();
+}
+
+async function refreshPendingTransactions() {
+    const list = document.getElementById('pending-transactions-list');
+    list.innerHTML = '<div style="text-align: center; padding: 20px;">Loading...</div>';
+    
+    try {
+        // This endpoint needs to be implemented in Backend
+        const response = await fetch('/active-transactions');
+        const transactions = await response.json();
+        
+        if (Object.keys(transactions).length === 0) {
+            list.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">No pending transactions found.</div>';
+            return;
+        }
+        
+        let html = '';
+        for (const [txnId, data] of Object.entries(transactions)) {
+            html += `
+            <div class="transaction-card">
+                <div class="transaction-header">
+                    <code>${txnId}</code>
+                    <span class="transaction-badge">${data.type || 'UNKNOWN'}</span>
+                </div>
+                <div class="transaction-details">
+                    <span><strong>Status:</strong> ${data.status}</span>
+                    <span><strong>Node:</strong> ${data.node || 'Unknown'}</span>
+                </div>
+                <div class="transaction-actions">
+                    <button class="commit-action-btn" onclick="resolveTransaction('${txnId}', 'COMMIT')">✓ COMMIT</button>
+                    <button class="rollback-action-btn" onclick="resolveTransaction('${txnId}', 'ROLLBACK')">✗ ROLLBACK</button>
+                </div>
+            </div>`;
+        }
+        list.innerHTML = html;
+        
+    } catch (error) {
+        console.error("Error fetching transactions:", error);
+        list.innerHTML = '<div style="text-align: center; padding: 20px; color: red;">Error loading transactions. Backend not ready?</div>';
+    }
+}
+
+async function resolveTransaction(txnId, action) {
+    if (!confirm(`Are you sure you want to ${action} this transaction?`)) return;
+    
+    try {
+        const response = await fetch('/resolve-transaction', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txnId, action })
+        });
+        
+        const result = await response.json();
+        alert(result.message);
+        refreshPendingTransactions(); // Refresh list
+        
+    } catch (error) {
+        alert("Error resolving transaction: " + error);
+    }
 }
 
 // Load node status from backend
