@@ -26,9 +26,7 @@ h1 {
     color: #333;
 }
 
-/* =======================
-   SETTINGS SECTION
-   ======================= */
+/* settings */
 .settings-section {
     display: flex;
     gap: 20px;
@@ -88,9 +86,7 @@ button:hover {
     background-color: #5a6268;
 }
 
-/* =======================
-   NODES GRID (Dashboard)
-   ======================= */
+/* nodes grid */
 
 .nodes-grid {
     display: grid;
@@ -163,9 +159,7 @@ button:hover {
     color: #333;
 }
 
-/* =======================
-   NODE VIEW PAGE
-   ======================= */
+/*NODE VIEW PAGE*/
 
 .node-view {
     display: none;
@@ -187,17 +181,6 @@ button:hover {
     border-bottom: 2px solid #e0e0e0;
 }
 
-/*
-.back-button {
-    background-color: #6c757d;
-    margin-right: 10px;
-}
-
-.back-button:hover {
-    background-color: #5a6268;
-}
-*/
-
 .node-status-section {
     margin-bottom: 30px;
     padding: 20px;
@@ -218,11 +201,11 @@ button:hover {
 }
 
 .node-status-section .node-card {
-    cursor: default; /* Remove pointer cursor */
+    cursor: default; 
 }
 
 .node-status-section .node-card:hover {
-    transform: none; /* Remove hover lift effect */
+    transform: none; 
     border-color: #ddd;
 }
 
@@ -280,9 +263,7 @@ button:hover {
     margin-bottom: 20px;
 }
 
-/* =======================
-   INSERT BUTTON
-   ======================= */
+/* insert */
 .insert-button {
     background-color: #28a745;
 }
@@ -291,9 +272,7 @@ button:hover {
     background-color: #218838;
 }
 
-/* =======================
-   CONCURRENCY BUTTON
-   ======================= */
+/* concurrency button */
 .concurrency-button {
     background-color: #fd7e14;
 }
@@ -302,9 +281,7 @@ button:hover {
     background-color: #e8590c;
 }
 
-/* =======================
-   REPORT BUTTONS
-   ======================= */
+/* report */
 .report-button {
     background-color: #6f42c1;
 }
@@ -313,9 +290,7 @@ button:hover {
     background-color: #5a32a3;
 }
 
-/* =======================
-   TABLE STYLING
-   ======================= */
+/* tables */
 
 /* Wrap table for scrolling */
 .table-container {
@@ -380,9 +355,7 @@ button:hover {
     background-color: #138496;
 }
 
-/* =======================
-   MODAL
-   ======================= */
+/* modals */
 
 .modal {
     display: none;
@@ -492,9 +465,7 @@ button:hover {
     background-color: #c82333;
 }
 
-/* =======================
-   RESPONSIVE DESIGN
-   ======================= */
+/* responsive */
 @media (max-width: 768px) {
     .settings-section {
         flex-direction: column;
@@ -527,9 +498,7 @@ button:hover {
     }
 }
 
-/* =======================
-   REPORT STYLING
-   ======================= */
+/* reports */
 
 #report-content {
     background: white; 
@@ -598,9 +567,7 @@ button:hover {
     text-align: center;
 }
 
-/* =======================
-   TOGGLE SWITCH STYLING
-   ======================= */
+/* toggle switch */
 .toggle-container {
     display: flex;
     align-items: center;
@@ -634,7 +601,7 @@ button:hover {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #dc3545; /* Red for Manual */
+    background-color: #dc3545;
     transition: 0.4s;
     border-radius: 24px;
 }
@@ -659,9 +626,7 @@ button:hover {
     transform: translateX(26px);
 }
 
-/* =======================
-   COMMIT BUTTON STYLING
-   ======================= */
+/* commit button */
 .commit-button {
     background-color: #17a2b8;
     color: white;
@@ -677,9 +642,7 @@ button:hover {
     opacity: 0.6;
 }
 
-/* =======================
-   TRANSACTION CARD STYLING (Inside Modal)
-   ======================= */
+/* transaction card */
 .transaction-card {
     background-color: #f8f9fa;
     border: 1px solid #dee2e6;

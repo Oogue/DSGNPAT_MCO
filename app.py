@@ -281,29 +281,22 @@ def insert_movie():
         params = (data.get('titleId'), data.get('ordering'), data.get('title'), region, data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle'))
         query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
 
-        # === CONCURRENCY SIMULATION MODE (Auto Commit OFF) ===
+        # --- CONCURRENCY SIMULATION MODE (Auto Commit OFF) ---
         if not GLOBAL_SETTINGS['auto_commit']:
             print(f"Manual Mode: Locking {primary_target_node} AND node1")
             
-            # 1. Execute on Primary (Node 2 or 3)
             res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
             
-            # 2. Execute on Central (Node 1) - effectively a "Dual Write" lock
             res_central = execute_query('node1', query, params, commit_immediately=False)
             
             if res_primary['success'] and res_central['success']:
                 ACTIVE_TXN_CONNECTIONS[txn_id] = {
                     'type': 'INSERT', 
                     'status': 'PENDING_MANUAL',
-                    # Store BOTH connections here. The resolve_transaction function 
-                    # already knows how to loop through this dictionary and commit all of them.
                     'connections': { 
                         primary_target_node: res_primary['conn_obj'],
                         'node1': res_central['conn_obj']
                     },
-                    # IMPORTANT: Set replication target to None. 
-                    # Since we are manually writing to Node 1 now, we don't need to 
-                    # "replicate" to it again after the commit.
                     'replication': {
                         'target': None, 
                         'query': query,
@@ -316,12 +309,11 @@ def insert_movie():
                     "logs": [f"Paused INSERT. Locked {primary_target_node} and Node 1 (Central)."]
                 })
             else:
-                # Cleanup if one failed
                 if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
                 if res_central.get('conn_obj'): res_central['conn_obj'].close()
                 return jsonify({"status": "FAILED", "error": "Failed to acquire locks on both nodes."})
 
-        # === RECOVERY V3 MODE (Auto Commit ON) ===
+        # --- RECOVERY V3 MODE (Auto Commit ON) ---
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         logs = []
         
@@ -363,7 +355,7 @@ def update_movie():
         
         if not region:
             print(f"Region missing for {title_id}. Querying Central Node...")
-            # Connect to Node 1 to find the Truth
+            # Connect to Node 1
             conn_central = get_db_connection('node1', autocommit_conn=True)
             if conn_central:
                 try:
@@ -385,11 +377,9 @@ def update_movie():
         params = (data.get('title'), data.get('ordering'), title_id)
         query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
 
-        # === CONCURRENCY SIMULATION MODE ===
+        # --- CONCURRENCY SIMULATION MODE ---
         if not GLOBAL_SETTINGS['auto_commit']:
-            # Lock Primary
             res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
-            # Lock Central
             res_central = execute_query('node1', query, params, commit_immediately=False)
 
             if res_primary['success'] and res_central['success']:
@@ -401,7 +391,7 @@ def update_movie():
                         'node1': res_central['conn_obj']
                     },
                     'replication': {
-                        'target': None, # No post-commit replication needed
+                        'target': None, # No post-commit replication
                         'query': query,
                         'params': params
                     }
@@ -417,7 +407,7 @@ def update_movie():
             if res_central.get('conn_obj'): res_central['conn_obj'].close()
             return jsonify({"status": "FAILED", "error": "Failed to acquire locks."})
 
-        # === RECOVERY V3 MODE ===
+        # --- RECOVERY V3 MODE ---
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         res_primary = execute_query(primary_target_node, query, params)
         LOG_MANAGER.log_local_commit(txn_id, 'UPDATE', title_id, data)
@@ -469,7 +459,7 @@ def delete_movie():
         query = "DELETE FROM movies WHERE titleId = %s"
         params = (title_id,)
 
-        # === CONCURRENCY SIMULATION MODE ===
+        # --- CONCURRENCY SIMULATION MODE ---
         if not GLOBAL_SETTINGS['auto_commit']:
             res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
             res_central = execute_query('node1', query, params, commit_immediately=False)
@@ -498,7 +488,7 @@ def delete_movie():
             if res_central.get('conn_obj'): res_central['conn_obj'].close()
             return jsonify({"status": "FAILED", "error": "Failed to acquire locks."})
 
-        # === RECOVERY V3 MODE ===
+        # --- RECOVERY V3 MODE ---
         replication_target_node = 'node1' if primary_target_node != 'node1' else None
         res_primary = execute_query(primary_target_node, query, params)
         LOG_MANAGER.log_local_commit(txn_id, 'DELETE', title_id, {'titleId': title_id, 'region': region})
@@ -596,20 +586,18 @@ def toggle_crash_mode():
     SIMULATE_CRASH_MODE = not SIMULATE_CRASH_MODE
     return jsonify({"status": "ENABLED" if SIMULATE_CRASH_MODE else "DISABLED"})
 
-# ROUTE: Report #1 - Regional Distribution
+# Report #1 - Regional Distribution
 @app.route('/report/distribution', methods=['GET'])
 def report_distribution():
     """Generates Report 1: Count of movies per region"""
     target_node = request.args.get('node', 'node1')
     
-    # We query the target node directly to see what IT sees
     conn = get_db_connection(target_node)
     if not conn:
         return jsonify({"error": "Could not connect to node"}), 500
 
     try:
         cursor = conn.cursor(dictionary=True)
-        # Simple aggregation query
         query = """
             SELECT region, COUNT(*) as count 
             FROM movies 
@@ -641,7 +629,7 @@ def report_distribution():
     finally:
         conn.close()
 
-# ROUTE: Report #2 - Content Type Breakdown
+# Report #2 - Content Type Breakdown
 @app.route('/report/types', methods=['GET'])
 def report_types():
     """Generates Report 2: Count of movies per content type"""
@@ -668,7 +656,6 @@ def report_types():
         total = 0
         for row in results:
             t = row['types'] if row['types'] else 'Unknown'
-            # Truncate long types for text display
             t_display = (t[:17] + '..') if len(t) > 17 else t
             c = row['count']
             report_lines.append(f"{t_display:<20} | {c:<10}")

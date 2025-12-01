@@ -3,25 +3,16 @@ let currentNode = null;
 function navigateToNode(nodeNumber) {
     const config = document.getElementById('app-config');
     const allowedNode = parseInt(config.getAttribute('data-current-node-id'));
-    
-    // Only allow viewing the current server's node
+
     if (nodeNumber !== allowedNode) {
         alert(`You can only view ${config.getAttribute('data-current-node')} from this server.`);
         return;
     }
     
     currentNode = nodeNumber;
-    //document.getElementById('dashboard-view').style.display = 'none';
     document.getElementById('node-view').classList.add('active');
-    //document.getElementById('current-node-title').textContent = 
-    //    nodeNumber === 1 ? 'Node 1 (Central)' : `Node ${nodeNumber} (Regional)`;
     
     loadNodeData(nodeNumber);
-}
-
-function navigateToDashboard() {
-    // Disabled - dashboard view not accessible in single-node mode
-    alert("Dashboard view is not available. Each server shows only its own node.");
 }
 
 async function applySettings() {
@@ -69,8 +60,6 @@ function updateCommitButtonState() {
     }
 }
 
-// --- NEW FUNCTIONS FOR COMMIT MODAL ---
-
 function openCommitModal() {
     document.getElementById('commit-modal').classList.add('active');
     refreshPendingTransactions();
@@ -81,7 +70,6 @@ async function refreshPendingTransactions() {
     list.innerHTML = '<div style="text-align: center; padding: 20px;">Loading...</div>';
     
     try {
-        // This endpoint needs to be implemented in Backend
         const response = await fetch('/active-transactions');
         const transactions = await response.json();
         
@@ -186,33 +174,18 @@ function updateNodeCard(nodeKey, nodeData) {
     }
 }
 
-// TODO: Implement real-time monitoring
-// - Auto-refresh node status every 5-10 seconds
-// - Monitor node health metrics
-// - Display connection status
-// - Show transaction logs
-// - Track replication lag
-// - Alert on node failures
-
-// Auto-refresh node status (optional)
 function startStatusMonitoring() {
-    // Initial load
     loadNodeStatus();
-    
     //to enable auto-refresh every 10 seconds
     setInterval(loadNodeStatus, 10000);
 }
 
 // Start monitoring when page loads
 document.addEventListener('DOMContentLoaded', function() {
-    // Read the current node from the hidden config div
     const config = document.getElementById('app-config');
     const currentNodeKey = config.getAttribute('data-current-node'); // e.g., "node1"
-    const currentNodeId = parseInt(config.getAttribute('data-current-node-id')); // e.g., 1
-    
-    // Auto-navigate to this node's view
+    const currentNodeId = parseInt(config.getAttribute('data-current-node-id')); // e.g., 
+
     navigateToNode(currentNodeId);
-    
-    // Start status monitoring
     startStatusMonitoring();
 });
