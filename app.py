@@ -224,6 +224,8 @@ def get_movies():
     allow_fallback = True
     target_node = requested_node
     reader_autocommit = not GLOBAL_SETTINGS.get('simulate_blocking', False)
+    
+    # 1. Initial connection attempt (to target_node)
     conn = get_db_connection(
         target_node, 
         isolation_level=GLOBAL_SETTINGS['isolation_level'], 
@@ -234,50 +236,142 @@ def get_movies():
     total_count = 0
     source = target_node
 
+    # Initialize all potential fallback connections to None
+    conn_node1 = None
+    conn_for_node2 = None
+    conn_for_node3 = None
+    
+    # Flag to control fallback to aggregation
+    trigger_aggregation_fallback = False
+
     if conn:
         cursor = conn.cursor(dictionary=True)
         try:
+            # 1a. Attempt to fetch from the requested node (N1, N2, or N3)
             cursor.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
             total_count = cursor.fetchone()['total']
             
+            # PRIMARY SUCCESS PATH
             if total_count > 0 or (not title_id and not title and not region):
-                conn_for_node2 = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
-                conn_for_node3 = get_db_connection('node3', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
-                cursor_node2 = conn_for_node2.cursor(dictionary=True) 
-                cursor_node3 = conn_for_node3.cursor(dictionary=True)
-                cursor_node2.execute(f"SELECT * FROM movies {where_clause}", params)
-                cursor_node3.execute(f"SELECT * FROM movies {where_clause}", params)
-                rows = cursor_node2.fetchall()
-                rows += cursor_node3.fetchall()
+                cursor.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
+                rows = cursor.fetchall()
 
                 if not reader_autocommit:
                     conn.commit()
-
+            
+            # FALLBACK PATH 1: Requested node (N2/N3) found 0 results -> Try N1
             elif allow_fallback and requested_node != 'node1':
                 conn.close()
-                conn = get_db_connection('node1', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
-                if conn:
-                    cursor = conn.cursor(dictionary=True)
-                    cursor.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
-                    total_count = cursor.fetchone()['total']
-                    cursor.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
-                    rows = cursor.fetchall()
+                conn = None # Close initial conn and reset the variable
+
+                # Attempt to connect to Node1
+                conn_node1 = get_db_connection('node1', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
+                
+                if conn_node1:
+                    cursor_node1 = conn_node1.cursor(dictionary=True)
+                    cursor_node1.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
+                    total_count = cursor_node1.fetchone()['total']
+                    cursor_node1.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
+                    rows = cursor_node1.fetchall()
                     source = 'node1 (Fallback)'
-        
+                    # Note: We rely on autocommit=True used for conn_node1 here, no manual commit needed
+                    
+                else:
+                    # N1 failed after N2/N3 returned zero results -> Trigger Aggregation
+                    trigger_aggregation_fallback = True
+
         except Exception as e:
-            print(f"Read Error: {e}")
+            # This block handles CONNECTION/QUERY FAILURE on the initial 'conn'
+            print(f"Read Error on {target_node}: {e}")
             if not reader_autocommit:
                 try: conn.rollback()
                 except: pass
-        finally:
-            if conn and conn.is_connected(): 
-                conn.close()
-            if conn_for_node2 and conn_for_node2.is_connected(): 
-                conn_for_node2.close()
-            if conn_for_node3 and conn_for_node3.is_connected(): 
-                conn_for_node3.close()
-                
+            
+            # Close the failing initial connection
+            if conn and conn.is_connected(): conn.close()
+            conn = None
 
+            # FALLBACK PATH 1 (Cont.): If N2/N3 failed due to error, try N1
+            if requested_node != 'node1':
+                
+                # Attempt to connect to Node1
+                conn_node1 = get_db_connection('node1', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=True)
+                
+                if conn_node1:
+                    try:
+                        cursor_node1 = conn_node1.cursor(dictionary=True)
+                        cursor_node1.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
+                        total_count = cursor_node1.fetchone()['total']
+                        cursor_node1.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
+                        rows = cursor_node1.fetchall()
+                        source = 'node1 (Fallback)'
+                    except Exception as e_node1:
+                        print(f"Read Error on node1 fallback: {e_node1}")
+                        trigger_aggregation_fallback = True
+                    finally:
+                        if conn_node1 and conn_node1.is_connected(): conn_node1.close()
+                        conn_node1 = None # Mark as closed
+                else:
+                    # Node1 failed to connect -> Trigger Aggregation
+                    trigger_aggregation_fallback = True
+        
+        # --- FALLBACK PATH 2: Aggregation from Fragments (If Node1 failed) ---
+        if trigger_aggregation_fallback:
+            source = 'Fragment Fallback (Aggregated)'
+            
+            # 2a. Fetch from Node2
+            try:
+                conn_for_node2 = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
+                cursor_node2 = conn_for_node2.cursor(dictionary=True)
+                cursor_node2.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
+                node2_count = cursor_node2.fetchone()['total']
+                # Fetch ALL matching records (NO LIMIT/OFFSET) for correct in-memory pagination
+                cursor_node2.execute(f"SELECT * FROM movies {where_clause}", params) 
+                rows_node2 = cursor_node2.fetchall()
+            except:
+                node2_count = 0
+                rows_node2 = []
+            finally:
+                if conn_for_node2 and conn_for_node2.is_connected() and not reader_autocommit:
+                    try: conn_for_node2.commit()
+                    except: pass
+
+            # 2b. Fetch from Node3
+            try:
+                conn_for_node3 = get_db_connection('node3', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
+                cursor_node3 = conn_for_node3.cursor(dictionary=True)
+                cursor_node3.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
+                node3_count = cursor_node3.fetchone()['total']
+                # Fetch ALL matching records (NO LIMIT/OFFSET) for correct in-memory pagination
+                cursor_node3.execute(f"SELECT * FROM movies {where_clause}", params) 
+                rows_node3 = cursor_node3.fetchall()
+            except:
+                node3_count = 0
+                rows_node3 = []
+            finally:
+                if conn_for_node3 and conn_for_node3.is_connected() and not reader_autocommit:
+                    try: conn_for_node3.commit()
+                    except: pass
+            
+            # 2c. Combine and Paginate
+            aggregated_rows = rows_node2 + rows_node3
+            total_count = node2_count + node3_count
+            
+            # Apply LIMIT and OFFSET to the combined result set in memory
+            rows = aggregated_rows[offset : offset + limit]
+
+   
+        # Close all connections
+        if conn and conn.is_connected(): 
+            conn.close()
+        # conn_node1 is closed within the except block, but check for safety
+        if conn_node1 and conn_node1.is_connected():
+            conn_node1.close()
+        if conn_for_node2 and conn_for_node2.is_connected(): 
+            conn_for_node2.close()
+        if conn_for_node3 and conn_for_node3.is_connected(): 
+            conn_for_node3.close()
+            
     return jsonify({"data": rows, "total": total_count, "source_node": source})
 
 # --- INSERT (Combined Logic) ---
