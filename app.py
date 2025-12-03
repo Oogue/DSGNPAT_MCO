@@ -241,8 +241,14 @@ def get_movies():
             total_count = cursor.fetchone()['total']
             
             if total_count > 0 or (not title_id and not title and not region):
-                cursor.execute(f"SELECT * FROM movies {where_clause} LIMIT %s OFFSET %s", params + [limit, offset])
-                rows = cursor.fetchall()
+                conn_for_node2 = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
+                conn_for_node3 = get_db_connection('node3', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
+                cursor_node2 = conn_for_node2.cursor(dictionary=True) 
+                cursor_node3 = conn_for_node3.cursor(dictionary=True)
+                cursor_node2.execute(f"SELECT * FROM movies {where_clause}", params)
+                cursor_node3.execute(f"SELECT * FROM movies {where_clause}", params)
+                rows = cursor_node2.fetchall()
+                rows += cursor_node3.fetchall()
 
                 if not reader_autocommit:
                     conn.commit()
@@ -266,6 +272,11 @@ def get_movies():
         finally:
             if conn and conn.is_connected(): 
                 conn.close()
+            if conn_for_node2 and conn_for_node2.is_connected(): 
+                conn_for_node2.close()
+            if conn_for_node3 and conn_for_node3.is_connected(): 
+                conn_for_node3.close()
+                
 
     return jsonify({"data": rows, "total": total_count, "source_node": source})
 
