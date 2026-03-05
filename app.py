@@ -13,6 +13,7 @@ from db_helpers import get_db_connection, DB_CONFIG
 import time
 import threading
 import traceback
+from RecoveryMemento import RecoveryState, RecoveryCaretaker
 
 from log_manager import DistributedLogManager
 from db_helpers import get_db_connection, DB_CONFIG    
@@ -102,39 +103,55 @@ def get_row_count(node_key):
 def get_last_update(node_key):
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+
+
+
 # --- RECOVERY LOGIC ---
 def _execute_recovery_cycle():
     conn = get_db_connection(LOCAL_NODE_KEY)
-    if not conn: return {"success": False, "error": "Local DB Error"}
+    if not conn:
+        return {"success": False, "error": "Local DB Error"}
 
     try:
-        temp_log_manager = DistributedLogManager(LOCAL_NODE_ID, conn)
-        failed_txns = temp_log_manager.get_failed_replications()
-        if not failed_txns: return {"success": True, "count": 0}
-            
-        recovery_logs = []
-        recovered_count = 0
-        
+        log_manager = DistributedLogManager(LOCAL_NODE_ID, conn)
+        failed_txns = log_manager.get_failed_replications()
+        if not failed_txns:
+            return {"success": True, "count": 0}
+
+        state = RecoveryState()
+        caretaker = RecoveryCaretaker(state)
+
         for txn in failed_txns:
+            # log the attempt first before doing the checkpoint
+            state.log_attempt(txn_id, target_node)
+            caretaker.checkpoint() # create the snapshot 
+
             txn_id = txn['transaction_id']
             target_node = txn['replication_target']
-            try: payload = json.loads(txn['new_value'])
-            except: payload = {}
+            try:
+                payload = json.loads(txn['new_value'])
+            except:
+                payload = {}
             op_type = txn['operation_type']
-            
-            # Target Logic
+
+            # Target resolution (same as original)
             if not target_node or str(target_node) == '0':
                 region = payload.get('region')
                 primary = 'node2' if region in ['US', 'JP'] else 'node3'
-                if LOCAL_NODE_KEY == primary: target_node = 'node1'
-                elif LOCAL_NODE_KEY == 'node1': target_node = primary
-                else: target_node = 'node1' 
-            
-            target_node = str(target_node)
-            if target_node.isdigit(): target_node = f"node{target_node}"
+                if LOCAL_NODE_KEY == primary:
+                    target_node = 'node1'
+                elif LOCAL_NODE_KEY == 'node1':
+                    target_node = primary
+                else:
+                    target_node = 'node1'
 
-            recovery_logs.append(f"Recovering {txn_id} -> {target_node}...")
-            
+            target_node = str(target_node)
+            if target_node.isdigit():
+                target_node = f"node{target_node}"
+
+            # state.log_attempt(txn_id, target_node)
+
+            # Execute query
             res = {'success': False}
             if op_type == 'INSERT':
                 query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE title=title"
@@ -148,19 +165,21 @@ def _execute_recovery_cycle():
                 query = "DELETE FROM movies WHERE titleId = %s"
                 params = (payload.get('titleId'),)
                 res = execute_query(target_node, query, params)
-                
+
             if res['success']:
-                temp_log_manager.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
-                recovery_logs.append("Success.")
-                recovered_count += 1
-            else:
-                recovery_logs.append(f"Failed: {res.get('error')}")
-        
-        return {"success": True, "count": recovered_count, "details": recovery_logs}
+                state.mark_success(txn_id, log_manager)
+            else: # if failure, rollback to revert to the last state
+                caretaker.rollback()   
+                state.mark_failure(txn_id, res.get('error'))
+
+        return {"success": True, "count": state.recovered_count, "details": state.recovery_logs}
     except Exception as e:
         return {"success": False, "error": str(e)}
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
+
+
 
 def start_background_recovery():
     def task():
@@ -196,6 +215,7 @@ def node_status():
     return jsonify(status_report)
 
 @app.route('/movies', methods=['GET'])
+
 def get_movies():
     offset = int(request.args.get('offset', 0))
     limit = int(request.args.get('limit', 100))
