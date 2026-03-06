@@ -16,6 +16,23 @@ class MovieUnitOfWork:
         self.primary_target_node = None
         self.replication_target_node = None
 
+    @staticmethod
+    def build_query(op_type, data, is_recovery=False): # Centralized query builder for all movie operations
+        if op_type == 'INSERT':
+            query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            if is_recovery:
+                query += " ON DUPLICATE KEY UPDATE title=title"
+            params = (data.get('titleId'), data.get('ordering'), data.get('title'), data.get('region'), data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle'))
+        elif op_type == 'UPDATE':
+            query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
+            params = (data.get('title'), data.get('ordering'), data.get('titleId'))
+        elif op_type == 'DELETE':
+            query = "DELETE FROM movies WHERE titleId = %s"
+            params = (data.get('titleId'),)
+        else:
+            raise ValueError(f"Unknown operation type: {op_type}")
+        return query, params
+
     def _resolve_region(self, title_id, region):
         conn_central = get_db_connection('node1', autocommit_conn=True)
         if not conn_central:
@@ -32,10 +49,12 @@ class MovieUnitOfWork:
         else:
             return jsonify({"error": "Central Node Unavailable."}), 500
     
-    def register(self, region, title_id, type, data, query, params):
+    def register(self, region, title_id, type, data):
         if not region:
             region = self._resolve_region(data.get('titleId'), data.get('region'))
         self.primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
+
+        query, params = MovieUnitOfWork.build_query(type, data)
 
         self.operations.append({
             'region': region,

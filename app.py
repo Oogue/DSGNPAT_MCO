@@ -152,20 +152,11 @@ def _execute_recovery_cycle():
 
             # state.log_attempt(txn_id, target_node)
 
-            # Execute query
+            # Execute query using centralized query builder
             res = {'success': False}
-            if op_type == 'INSERT':
-                query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE title=title"
-                params = (payload.get('titleId'), payload.get('ordering'), payload.get('title'), payload.get('region'), payload.get('language'), payload.get('types'), payload.get('attributes'), payload.get('isOriginalTitle'))
-                res = execute_query(target_node, query, params)
-            elif op_type == 'UPDATE':
-                query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
-                params = (payload.get('title'), payload.get('ordering'), payload.get('titleId'))
-                res = execute_query(target_node, query, params)
-            elif op_type == 'DELETE':
-                query = "DELETE FROM movies WHERE titleId = %s"
-                params = (payload.get('titleId'),)
-                res = execute_query(target_node, query, params)
+            is_recovery = (op_type == 'INSERT')
+            query, params = MovieUnitOfWork.build_query(op_type, payload, is_recovery=is_recovery)
+            res = execute_query(target_node, query, params)
 
             if res['success']:
                 state.mark_success(txn_id, log_manager)
@@ -403,10 +394,7 @@ def insert_movie():
     title_id = data.get('titleId')
     movies = MovieUnitOfWork(GLOBAL_SETTINGS, LOG_MANAGER, ACTIVE_TXN_CONNECTIONS, SIMULATE_CRASH_MODE)
 
-    params = (data.get('titleId'), data.get('ordering'), data.get('title'), region, data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle'))
-    query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-
-    movies.register(region, title_id, 'INSERT', data, query, params)
+    movies.register(region, title_id, 'INSERT', data)
     return jsonify(movies.commit())
 
 # --- UPDATE (Combined Logic) ---
@@ -417,10 +405,7 @@ def update_movie():
     title_id = data.get('titleId')
     movies = MovieUnitOfWork(GLOBAL_SETTINGS, LOG_MANAGER, ACTIVE_TXN_CONNECTIONS, SIMULATE_CRASH_MODE)
 
-    params = (data.get('title'), data.get('ordering'), title_id)
-    query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
-
-    movies.register(region, title_id, 'UPDATE', data, query, params)
+    movies.register(region, title_id, 'UPDATE', data)
     return jsonify(movies.commit())
 
 # --- DELETE (Combined Logic) ---
@@ -431,10 +416,7 @@ def delete_movie():
     title_id = data.get('titleId')
     movies = MovieUnitOfWork(GLOBAL_SETTINGS, LOG_MANAGER, ACTIVE_TXN_CONNECTIONS, SIMULATE_CRASH_MODE)
 
-    query = "DELETE FROM movies WHERE titleId = %s"
-    params = (title_id,)
-
-    movies.register(region, title_id, 'DELETE', data, query, params)
+    movies.register(region, title_id, 'DELETE', data)
     return jsonify(movies.commit())
 
 # --- SETTINGS & MANUAL RESOLUTION ---
