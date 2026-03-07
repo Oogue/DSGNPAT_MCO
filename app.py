@@ -122,12 +122,15 @@ def _execute_recovery_cycle():
         caretaker = RecoveryCaretaker(state)
 
         for txn in failed_txns:
+            
+            txn_id = txn['transaction_id']
+            target_node = txn['replication_target']
+
             # log the attempt first before doing the checkpoint
             state.log_attempt(txn_id, target_node)
             caretaker.checkpoint() # create the snapshot 
 
-            txn_id = txn['transaction_id']
-            target_node = txn['replication_target']
+            
             try:
                 payload = json.loads(txn['new_value'])
             except:
