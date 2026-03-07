@@ -16,7 +16,8 @@ import traceback
 from RecoveryMemento import RecoveryState, RecoveryCaretaker
 
 from log_manager import DistributedLogManager
-from db_helpers import get_db_connection, DB_CONFIG    
+from db_helpers import get_db_connection, DB_CONFIG   
+from MovieUnitOfWork import MovieUnitOfWork 
 
 # --- GLOBAL CONCURRENCY SETTINGS ---
 GLOBAL_SETTINGS = {
@@ -154,20 +155,11 @@ def _execute_recovery_cycle():
 
             # state.log_attempt(txn_id, target_node)
 
-            # Execute query
+            # Execute query using centralized query builder
             res = {'success': False}
-            if op_type == 'INSERT':
-                query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE title=title"
-                params = (payload.get('titleId'), payload.get('ordering'), payload.get('title'), payload.get('region'), payload.get('language'), payload.get('types'), payload.get('attributes'), payload.get('isOriginalTitle'))
-                res = execute_query(target_node, query, params)
-            elif op_type == 'UPDATE':
-                query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
-                params = (payload.get('title'), payload.get('ordering'), payload.get('titleId'))
-                res = execute_query(target_node, query, params)
-            elif op_type == 'DELETE':
-                query = "DELETE FROM movies WHERE titleId = %s"
-                params = (payload.get('titleId'),)
-                res = execute_query(target_node, query, params)
+            is_recovery = (op_type == 'INSERT')
+            query, params = MovieUnitOfWork.build_query(op_type, payload, is_recovery=is_recovery)
+            res = execute_query(target_node, query, params)
 
             if res['success']:
                 state.mark_success(txn_id, log_manager)
@@ -400,240 +392,35 @@ def get_movies():
 # --- INSERT (Combined Logic) ---
 @app.route('/insert', methods=['POST'])
 def insert_movie():
-    try:
-        data = request.json
-        txn_id = str(uuid.uuid4())
-        region = data.get('region')
-        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-        
-        params = (data.get('titleId'), data.get('ordering'), data.get('title'), region, data.get('language'), data.get('types'), data.get('attributes'), data.get('isOriginalTitle'))
-        query = "INSERT INTO movies (titleId, ordering, title, region, language, types, attributes, isOriginalTitle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+    data = request.json
+    region = data.get('region')
+    title_id = data.get('titleId')
+    movies = MovieUnitOfWork(GLOBAL_SETTINGS, LOG_MANAGER, ACTIVE_TXN_CONNECTIONS, SIMULATE_CRASH_MODE)
 
-        # --- CONCURRENCY SIMULATION MODE (Auto Commit OFF) ---
-        if not GLOBAL_SETTINGS['auto_commit']:
-            print(f"Manual Mode: Locking {primary_target_node} AND node1")
-            
-            res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
-            
-            res_central = execute_query('node1', query, params, commit_immediately=False)
-            
-            if res_primary['success'] and res_central['success']:
-                ACTIVE_TXN_CONNECTIONS[txn_id] = {
-                    'type': 'INSERT', 
-                    'status': 'PENDING_MANUAL',
-                    'connections': { 
-                        primary_target_node: res_primary['conn_obj'],
-                        'node1': res_central['conn_obj']
-                    },
-                    'replication': {
-                        'target': None, 
-                        'query': query,
-                        'params': params
-                    }
-                }
-                return jsonify({
-                    "status": "MANUAL_PENDING", 
-                    "txn_id": txn_id, 
-                    "logs": [f"Paused INSERT. Locked {primary_target_node} and Node 1 (Central)."]
-                })
-            else:
-                if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
-                if res_central.get('conn_obj'): res_central['conn_obj'].close()
-                return jsonify({"status": "FAILED", "error": "Failed to acquire locks on both nodes."})
-
-        # --- RECOVERY V3 MODE (Auto Commit ON) ---
-        replication_target_node = 'node1' if primary_target_node != 'node1' else None
-        logs = []
-        
-        res_primary = execute_query(primary_target_node, query, params)
-        LOG_MANAGER.log_local_commit(txn_id, 'INSERT', data.get('titleId'), data)
-        
-        if SIMULATE_CRASH_MODE: time.sleep(10)
-        
-        primary_success = res_primary['success']
-        if not primary_success:
-            LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
-            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
-            logs.append(f"Primary {primary_target_node} Failed. Queued.")
-
-        if replication_target_node:
-            res_replica = execute_query(replication_target_node, query, params)
-            if res_replica['success'] and primary_success:
-                LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
-                LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_SUCCESS')
-            elif not res_replica['success']:
-                LOG_MANAGER.log_replication_attempt(txn_id, replication_target_node)
-                LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
-                logs.append(f"Replica {replication_target_node} Failed. Queued.")
-
-        return jsonify({"status": "COMPLETED", "txn_id": txn_id, "logs": logs})
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+    movies.register(region, title_id, 'INSERT', data)
+    return jsonify(movies.commit())
 
 # --- UPDATE (Combined Logic) ---
 @app.route('/update', methods=['POST'])
 def update_movie():
-    try:
-        data = request.json
-        txn_id = str(uuid.uuid4())
-        title_id = data.get('titleId')
-        region = data.get('region') 
-        
-        if not region:
-            print(f"Region missing for {title_id}. Querying Central Node...")
-            # Connect to Node 1
-            conn_central = get_db_connection('node1', autocommit_conn=True)
-            if conn_central:
-                try:
-                    cur = conn_central.cursor(dictionary=True)
-                    cur.execute("SELECT region FROM movies WHERE titleId = %s", (title_id,))
-                    row = cur.fetchone()
-                    if row:
-                        region = row['region']
-                        print(f"Resolved region to: {region}")
-                    else:
-                        return jsonify({"error": "TitleID not found in Central Database."}), 404
-                finally:
-                    conn_central.close()
-            else:
-                return jsonify({"error": "Central Node Unavailable. Cannot determine region for routing."}), 500
+    data = request.json
+    region = data.get('region')
+    title_id = data.get('titleId')
+    movies = MovieUnitOfWork(GLOBAL_SETTINGS, LOG_MANAGER, ACTIVE_TXN_CONNECTIONS, SIMULATE_CRASH_MODE)
 
-        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-
-        params = (data.get('title'), data.get('ordering'), title_id)
-        query = "UPDATE movies SET title = %s, ordering = %s WHERE titleId = %s"
-
-        # --- CONCURRENCY SIMULATION MODE ---
-        if not GLOBAL_SETTINGS['auto_commit']:
-            res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
-            res_central = execute_query('node1', query, params, commit_immediately=False)
-
-            if res_primary['success'] and res_central['success']:
-                ACTIVE_TXN_CONNECTIONS[txn_id] = {
-                    'type': 'UPDATE', 
-                    'status': 'PENDING_MANUAL',
-                    'connections': { 
-                        primary_target_node: res_primary['conn_obj'],
-                        'node1': res_central['conn_obj']
-                    },
-                    'replication': {
-                        'target': None, # No post-commit replication
-                        'query': query,
-                        'params': params
-                    }
-                }
-                return jsonify({
-                    "status": "MANUAL_PENDING", 
-                    "txn_id": txn_id, 
-                    "logs": [f"Paused UPDATE. Locked {primary_target_node} and Node 1."]
-                })
-            
-            # Cleanup
-            if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
-            if res_central.get('conn_obj'): res_central['conn_obj'].close()
-            return jsonify({"status": "FAILED", "error": "Failed to acquire locks."})
-
-        # --- RECOVERY V3 MODE ---
-        replication_target_node = 'node1' if primary_target_node != 'node1' else None
-        res_primary = execute_query(primary_target_node, query, params)
-        LOG_MANAGER.log_local_commit(txn_id, 'UPDATE', title_id, data)
-        if SIMULATE_CRASH_MODE: time.sleep(10)
-        
-        if not res_primary['success']:
-            LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
-            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
-
-        if replication_target_node:
-            execute_query(replication_target_node, query, params) 
-
-        return jsonify({"status": "COMPLETED", "txn_id": txn_id})
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({
-            "status": "CRASH",
-            "error": "Internal Server Error trapped",
-            "details": str(e)
-        }), 500
+    movies.register(region, title_id, 'UPDATE', data)
+    return jsonify(movies.commit())
 
 # --- DELETE (Combined Logic) ---
 @app.route('/delete', methods=['POST'])
 def delete_movie():
-    try:
-        data = request.json
-        txn_id = str(uuid.uuid4())
-        title_id = data.get('titleId')
-        region = data.get('region') 
-        
-        if not region:
-            conn_central = get_db_connection('node1', autocommit_conn=True)
-            if conn_central:
-                try:
-                    cur = conn_central.cursor(dictionary=True)
-                    cur.execute("SELECT region FROM movies WHERE titleId = %s", (title_id,))
-                    row = cur.fetchone()
-                    if row:
-                        region = row['region']
-                    else:
-                        return jsonify({"error": "TitleID not found."}), 404
-                finally:
-                    conn_central.close()
-            else:
-                 return jsonify({"error": "Central Node Unavailable."}), 500
-        
-        primary_target_node = 'node2' if region in ['US', 'JP'] else 'node3'
-        query = "DELETE FROM movies WHERE titleId = %s"
-        params = (title_id,)
+    data = request.json
+    region = data.get('region')
+    title_id = data.get('titleId')
+    movies = MovieUnitOfWork(GLOBAL_SETTINGS, LOG_MANAGER, ACTIVE_TXN_CONNECTIONS, SIMULATE_CRASH_MODE)
 
-        # --- CONCURRENCY SIMULATION MODE ---
-        if not GLOBAL_SETTINGS['auto_commit']:
-            res_primary = execute_query(primary_target_node, query, params, commit_immediately=False)
-            res_central = execute_query('node1', query, params, commit_immediately=False)
-
-            if res_primary['success'] and res_central['success']:
-                ACTIVE_TXN_CONNECTIONS[txn_id] = {
-                    'type': 'DELETE', 
-                    'status': 'PENDING_MANUAL',
-                    'connections': { 
-                        primary_target_node: res_primary['conn_obj'], 
-                        'node1': res_central['conn_obj']
-                    },
-                    'replication': {
-                        'target': None,
-                        'query': query,
-                        'params': params
-                    }
-                }
-                return jsonify({
-                    "status": "MANUAL_PENDING", 
-                    "txn_id": txn_id, 
-                    "logs": [f"Paused DELETE. Locked {primary_target_node} and Node 1."]
-                })
-            
-            if res_primary.get('conn_obj'): res_primary['conn_obj'].close()
-            if res_central.get('conn_obj'): res_central['conn_obj'].close()
-            return jsonify({"status": "FAILED", "error": "Failed to acquire locks."})
-
-        # --- RECOVERY V3 MODE ---
-        replication_target_node = 'node1' if primary_target_node != 'node1' else None
-        res_primary = execute_query(primary_target_node, query, params)
-        LOG_MANAGER.log_local_commit(txn_id, 'DELETE', title_id, {'titleId': title_id, 'region': region})
-        
-        if SIMULATE_CRASH_MODE: time.sleep(10)
-        
-        if not res_primary['success']:
-            LOG_MANAGER.log_replication_attempt(txn_id, primary_target_node)
-            LOG_MANAGER.update_replication_status(txn_id, 'REPLICATION_FAILED')
-
-        if replication_target_node:
-            execute_query(replication_target_node, query, params)
-
-        return jsonify({"status": "COMPLETED", "txn_id": txn_id})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    movies.register(region, title_id, 'DELETE', data)
+    return jsonify(movies.commit())
 
 # --- SETTINGS & MANUAL RESOLUTION ---
 
