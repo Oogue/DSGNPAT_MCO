@@ -14,10 +14,10 @@ import time
 import threading
 import traceback
 from RecoveryMemento import RecoveryState, RecoveryCaretaker
-
+from FragmentQueriesMemento import FragmentQueriesState, FragmentQueriesCaretaker
 from log_manager import DistributedLogManager
 from db_helpers import get_db_connection, DB_CONFIG   
-from MovieUnitOfWork import MovieUnitOfWork 
+from MovieUnitOfWork import MovieUnitOfWork
 
 # --- GLOBAL CONCURRENCY SETTINGS ---
 GLOBAL_SETTINGS = {
@@ -334,47 +334,65 @@ def get_movies():
         if trigger_aggregation_fallback:
             source = 'Fragment Fallback (Aggregated)'
             
+            # 1. Initialize Memento Originator and Caretaker
+            agg_state = FragmentQueriesState()
+            caretaker = FragmentQueriesCaretaker(agg_state)
+            
+            # Checkpoint the initial empty state
+            caretaker.checkpoint()
+            
             # 2a. Fetch from Node2
-            try:
-                conn_for_node2 = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
-                cursor_node2 = conn_for_node2.cursor(dictionary=True)
-                cursor_node2.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
-                node2_count = cursor_node2.fetchone()['total']
-                # Fetch ALL matching records (NO LIMIT/OFFSET) for correct in-memory pagination
-                cursor_node2.execute(f"SELECT * FROM movies {where_clause}", params) 
-                rows_node2 = cursor_node2.fetchall()
-            except:
-                node2_count = 0
-                rows_node2 = []
-            finally:
-                if conn_for_node2 and conn_for_node2.is_connected() and not reader_autocommit:
-                    try: conn_for_node2.commit()
-                    except: pass
+            if not agg_state.node2_completed:
+                try:
+                    conn_for_node2 = get_db_connection('node2', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
+                    cursor_node2 = conn_for_node2.cursor(dictionary=True)
+                    cursor_node2.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
+                    node2_count = cursor_node2.fetchone()['total']
+                    
+                    cursor_node2.execute(f"SELECT * FROM movies {where_clause}", params) 
+                    rows_node2 = cursor_node2.fetchall()
+                    
+                    # Update State and create a new Checkpoint
+                    agg_state.mark_node2_success(node2_count, rows_node2)
+                    caretaker.checkpoint()
+                    
+                except Exception as e:
+                    print(f"Error fetching Node 2 fragment: {e}")
+                    caretaker.rollback() # Revert to previous safe state
+                finally:
+                    if conn_for_node2 and conn_for_node2.is_connected() and not reader_autocommit:
+                        try: conn_for_node2.commit()
+                        except: pass
 
             # 2b. Fetch from Node3
-            try:
-                conn_for_node3 = get_db_connection('node3', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
-                cursor_node3 = conn_for_node3.cursor(dictionary=True)
-                cursor_node3.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
-                node3_count = cursor_node3.fetchone()['total']
-                # Fetch ALL matching records (NO LIMIT/OFFSET) for correct in-memory pagination
-                cursor_node3.execute(f"SELECT * FROM movies {where_clause}", params) 
-                rows_node3 = cursor_node3.fetchall()
-            except:
-                node3_count = 0
-                rows_node3 = []
-            finally:
-                if conn_for_node3 and conn_for_node3.is_connected() and not reader_autocommit:
-                    try: conn_for_node3.commit()
-                    except: pass
+            if not agg_state.node3_completed:
+                try:
+                    conn_for_node3 = get_db_connection('node3', isolation_level=GLOBAL_SETTINGS['isolation_level'], autocommit_conn=reader_autocommit)
+                    cursor_node3 = conn_for_node3.cursor(dictionary=True)
+                    cursor_node3.execute(f"SELECT COUNT(*) as total FROM movies {where_clause}", params)
+                    node3_count = cursor_node3.fetchone()['total']
+                    
+                    cursor_node3.execute(f"SELECT * FROM movies {where_clause}", params) 
+                    rows_node3 = cursor_node3.fetchall()
+                    
+                    # Update State and create a new Checkpoint
+                    agg_state.mark_node3_success(node3_count, rows_node3)
+                    caretaker.checkpoint()
+                    
+                except Exception as e:
+                    print(f"Error fetching Node 3 fragment: {e}")
+                    caretaker.rollback() # Revert to previous safe state
+                finally:
+                    if conn_for_node3 and conn_for_node3.is_connected() and not reader_autocommit:
+                        try: conn_for_node3.commit()
+                        except: pass
             
-            # 2c. Combine and Paginate
-            aggregated_rows = rows_node2 + rows_node3
-            total_count = node2_count + node3_count
+            # 2c. Combine and Paginate directly from the Originator's State
+            aggregated_rows = agg_state.rows_node2 + agg_state.rows_node3
+            total_count = agg_state.node2_count + agg_state.node3_count
             
             # Apply LIMIT and OFFSET to the combined result set in memory
             rows = aggregated_rows[offset : offset + limit]
-
    
         # Close all connections
         if conn and conn.is_connected(): 
