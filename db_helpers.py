@@ -2,22 +2,22 @@ import mysql.connector
 # Note: You may need to load_dotenv() and define DB_CONFIG here
 DB_CONFIG = {
     'node1': {
-        'host': '10.2.14.84', 
-        'user': 'admin',
-        'password': 'poginiallen',     
-        'database': 'mco2_ddb'       
+        'host': '127.0.0.1', 
+        'user': 'root',         
+        'password': 'Hulaanmo0!',
+        'database': 'mco2_ddb_node1'       
     },
     'node2': {
-        'host': '10.2.14.85',   
-        'user': 'admin',
-        'password': 'poginiallen',
-        'database': 'mco2_ddb'
+        'host': '127.0.0.1',   
+        'user': 'root',
+        'password': 'Hulaanmo0!',
+        'database': 'mco2_ddb_node2'
     },
     'node3': {
-        'host': '10.2.14.86',   
-        'user': 'admin',
-        'password': 'poginiallen',
-        'database': 'mco2_ddb'
+        'host': '127.0.0.1',   
+        'user': 'root',
+        'password': 'Hulaanmo0!',
+        'database': 'mco2_ddb_node3'
     }
 }
 

@@ -3,7 +3,6 @@ import time
 import traceback
 from flask import jsonify
 from db_helpers import get_db_connection
-from app import execute_query
 
 class MovieUnitOfWork:
     def __init__(self, global_settings, log_manager, txn_connections, simulate_crash = False):
@@ -35,19 +34,19 @@ class MovieUnitOfWork:
 
     def _resolve_region(self, title_id, region):
         conn_central = get_db_connection('node1', autocommit_conn=True)
-        if not conn_central:
+        if conn_central: 
             try:
                 cur = conn_central.cursor(dictionary=True)
                 cur.execute("SELECT region FROM movies WHERE titleId = %s", (title_id,))
                 row = cur.fetchone()
                 if row:
-                    region = row['region']
+                    return row['region']
                 else:
-                    return jsonify({"error": "TitleID not found."}), 404
+                    raise ValueError("TitleID not found for deletion.")
             finally:
                 conn_central.close()
         else:
-            return jsonify({"error": "Central Node Unavailable."}), 500
+            raise ConnectionError("Central Node Unavailable.")
     
     def register(self, region, title_id, type, data):
         if not region:
@@ -66,6 +65,8 @@ class MovieUnitOfWork:
         })
 
     def commit(self):
+        from app import execute_query
+
         logs = []
         try:
             for op in self.operations:
@@ -102,7 +103,7 @@ class MovieUnitOfWork:
                 self.replication_target_node = 'node1' if self.primary_target_node != 'node1' else None
                 
                 res_primary = execute_query(self.primary_target_node, op['query'], op['params'])
-                self.log_manager.log_local_commit(self.txn_id, op['type'], op['data'])
+                self.log_manager.log_local_commit(self.txn_id, op['type'], op['title_id'], op['data'])
 
                 if self.simulate_crash: time.sleep(10)
 
@@ -126,8 +127,8 @@ class MovieUnitOfWork:
         
         except Exception as e:
             traceback.print_exc()
-            return jsonify({
+            return {
                 "status": "CRASH",
                 "error": "Internal Server Error trapped",
                 "details": str(e)
-            }), 500
+            }

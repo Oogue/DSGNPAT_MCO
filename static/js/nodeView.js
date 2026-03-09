@@ -296,7 +296,7 @@ async function deleteRow(titleId) {
         const response = await fetch('/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ titleId: titleId })
+            body: JSON.stringify({ titleId: titleId})
         });
 
         const result = await response.json();
